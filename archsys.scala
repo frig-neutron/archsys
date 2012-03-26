@@ -1,332 +1,238 @@
 #!/bin/bash
-PATH=$PATH:/sbin:/usr/sbin
-#  pgrep -f $0\ $1 | grep -v grep | grep -v pgrep | grep -v $$ > /dev/null
-#  if [[ $? -eq 0 ]]; then
-#    echo process running
-#    exit 3
-#  fi
-
   exec scala "$0" "$@"
-  wait
 !#
+/**
+ * Script to facilitate the archival of a complete or 
+ * partial system using a variety of methods.
+ *
+ * Archival methods: 
+ *  - rsync
+ *  - 
+ *  - compressed binary snapshot
+ * 
+ * Suppors archival of volumes using LVM (preferred) or
+ * raw block devices (sometimes necessary).
+ */
 
-import scala.sys.process._
+implicit def arrayToList[A](arr: Array[A]) = arr.toList
 
-var lvmUtilsPrefix = ""
-var volumeGroupName = ""
-var machineName = ""
+/**
+ * Keep all the system-interface operations here
+ */
+object Sys {
+  import scala.sys.process._
+  import java.io.File
 
-object ArchSys
-{
-	val logStdStuff = ProcessLogger(
-		(s: String) => info(s),
-		(s: String) => error(s)
-	)
+  implicit def stringToFile(path: String) : File = new File(path)
+  implicit def stringBuilderToString(strb: StringBuilder) : String = strb.toString
 
-	class Log(level: String) 
-	{
-		val tag = "update-backup-all"
-		def loggerCmd(msg: String) = 
-		{
-			val logCmd = ("logger -t " + tag + " -- " + level + " - " + msg)
-			logCmd ! 
-		}
+  object DevNull extends ProcessLogger { 
+    def buffer[T](f: => T): T = f
+    def out(s: => String): Unit = ()
+    def err(s: => String): Unit = ()
+  }
 
-		def apply(msg: String) = loggerCmd (msg)
-	}
+  class StringProcessLogger extends ProcessLogger {
+    private val outB = new StringBuilder
+    private val errB = new StringBuilder
 
-	val info = new Log("INFO")
-	val debug = new Log("DEBUG")
-	val error = new Log("ERROR")
-	val fatal = new Log("FATAL")
+    private def appendLine(b: StringBuilder, s: String) = b append s append "\n"
+    def buffer[T](f: => T): T = f
+    def out(s: => String): Unit = appendLine(outB, s)
+    def err(s: => String): Unit = appendLine(errB, s)
 
-	val (lvName, mountPointSuffix) = ("lvName", "mountPointSuffix")
+    def getOut : String = outB.trim
+    def getErr : String = errB.trim
 
-	val filesystemsMap = Map (
-		"iron-system-image" -> List(
-			Map(lvName -> "root", mountPointSuffix -> "/"),
-			Map(lvName -> "usr", mountPointSuffix -> "/usr"),
-			Map(lvName -> "var", mountPointSuffix -> "/var" ),
-			Map(lvName -> "artifactory", mountPointSuffix -> "/usr/local/artifactory" ),
-			Map(lvName -> "home", mountPointSuffix -> "/home" )
-		),
+    private def linesOf(str: String) = str split "\n" map (_.trim)
+    def getOutLines : List[String] = linesOf(getOut)
+    def getErrLines : List[String] = linesOf(getErr)
+  }
 
-		"iron-act-image" -> List(
-			Map(lvName -> "act-partition", mountPointSuffix -> "")
-		),
+  def mounts = "mount" !!
 
-		"warden-system-image" -> List(
-			Map(lvName -> "root", mountPointSuffix -> "/"),
-			Map(lvName -> "usr", mountPointSuffix -> "/usr"),
-			Map(lvName -> "var", mountPointSuffix -> "/var" ),
-			Map(lvName -> "home", mountPointSuffix -> "/home" )
-		),
+  def isBlockDevice(dev: String) = {
+    val log = new StringProcessLogger
+    "file -b "+dev ! log // don't exception if retcode != 0
+    log.getOut == "block special"
+  }
 
-		"domU-centos55-mailtest" -> List(
-			Map(lvName -> "domU-centos55-mailtest", mountPointSuffix -> "/")
-		),
+  def isLvmManaged(dev: String) = 
+    isBlockDevice(dev) && 
+    ("lvdisplay "+dev ! DevNull) == 0 // don't exception if retcode != 0
 
-		"domU-omrs-int" -> List(
-			Map(lvName -> "domU-omrs-int", mountPointSuffix -> "/")
-		),
+  def getLvInfo(dev: String) = { 
+    val log = new StringProcessLogger
+    "lvdisplay -C "+dev ! log // don't exception if retcode != 0
+    val bits = log.getOutLines(1).trim split " +" slice (0,2)
+    new LvInfo(bits(1), bits(0))
+  }
 
-		"domU-omrs-int-omrs" -> List(
-			Map(lvName -> "domU-omrs-int-omrs", mountPointSuffix -> "/")
-		),
+  def createLvSnap(src: LvInfo, dst: LvInfo) : Unit = {
+    // _DO_ exception if retcode != 0
+    println ("lvcreate -L 2G --snapshot --name "+dst.lv+" /dev/"+src.vg+"/"+src.lv)
+  }
 
-		"net-services-system-image" -> List(
-			Map(lvName -> "net-services-disk", mountPointSuffix -> "/")
-		)
- 	)
-  
-	def prepareVars = 
-	{
-		lvmUtilsPrefix = (("which lvremove") !!).toString.trim.replace("sbin/lvremove", "")
-//		val hostName = (("hostname") !!).toString.trim
-//		volumeGroupName = getVGName(hostName)
-	}
+  // _DO_ exception if retcode != 0
+  def mount(dev: String, path: String) = ()
 
-	def getVGName =
-	{
-		machineName match
-		{
-			case "warden-system-image"		=>	"vg0"
-			case "iron-act-image"			=>	"WORK"
-			case "iron-main-image"			=>	"WORK"
-			case "iron-system-image"		=>	"mother"
-			case "domU-centos55-mailtest"		=>	"mother"
-			case "domU-omrs-int"			=>	"mother"
-			case "domU-omrs-int-omrs"		=>	"mother"
-			case "net-services-system-image"	=>	"mother"
-			case "test"				=>	"system"
-		}
-	}
-  
-	def main(args: Array[String]) : Unit = 
-	{
-		prepareVars
-		sanityCheck(args)
-		machineName = (args(0)).trim
-		backup(filesystemsMap(machineName))
-	}
-
-	val excludes = List("/dev", "/var/spool", "/lost+found", "/mnt", "/proc", "/sys", "/var/spool/squid")
-	val snapshotRootMountPoint = "/mnt/snapshot"
-	
-	val snapshotNameSuffix = "-snap"
-	val snapSize = "256M"
-	
-	val FATAL_LVM_CREATE = 4
-	val FATAL_MOUNT = 5
-	val ERROR_UNMOUNT = 6
-	val ERROR_LVM_REMOVE = 7
-	val FATAL_SCRIPT_PARAMETERS = 8
-	val FATAL_NO_MACHINE_TO_BACKUP = 9
-	val FATAL_SYSTEM_SHUTDOWN = 10
-	val FATAL_SYSTEM_REBOOT = 11
-	val FATAL_NO_SPACE = 12
-
-	def backup(filesystems: List[Map[String, String]])
-	{
-		snapshotTargetVolumes(filesystems)
-		mountTargetVolumes(filesystems)
-		pipeOutput(filesystems, new java.io.BufferedOutputStream(System.out, 65536))
-		unmountTargetVolumes(filesystems)
-		removeTargetVolumeSnapshots(filesystems)
-		System.exit(0) 
-	}
-
-	private def sanityCheck(args: Array[String]) =
-	{ 
-		//Check that the minium number of parameters passed to the script are correct
-		if ( args.size < 1 )
-		{
-			fatal ("script usage: archsys.scala name-of-system-to-backup")
-			System.exit(FATAL_SCRIPT_PARAMETERS)
-		}
-  
-		//System should not be shutting down
-		val runLevel = ("runlevel"!!).split("\\s+")(1)
-		if (runLevel == 0)
-		{
-			fatal ("shutdown of system in progress. Aborting backup.")
-			System.exit(FATAL_SYSTEM_SHUTDOWN)
-		}
-		else if ( runLevel == 6 )
-		{
-			fatal ("reboot of system in progress. Aborting backup.")
-			System.exit(FATAL_SYSTEM_REBOOT)
-		}      
-
-		//Volumemap should contain key for machine to backup
-		val machineName = (args(0)).trim
-		if(!filesystemsMap.contains(machineName))
-		{
-			fatal("System " + machineName + " could not be found to back up.  Aborting backup.");
-			System.exit(FATAL_NO_MACHINE_TO_BACKUP);
-		}
-  
-/*		//There should be enough free space for snapshots
-		val freeSpace = ("df /dev"!!).split("\\s+")(10)
-		val needSpace = (256000 * filesystemsMap(machineName).size).toString
-		if (freeSpace < needSpace)
-		{
-			fatal("Not enough space to make snapshots for: " + machineName + ". Needed: " + needSpace + " bytes, Found: " + freeSpace + " bytes free.")
-			System.exit(FATAL_NO_SPACE)
-		}*/
-	}
-
-	private def snapshotTargetVolumes(filesystems: List[Map[String, String]]) = 
-	{
-		info ("> create volume snapshots")
-		def snapshotVol(volDef : Map[String, String]) = 
-		{
-			val volDevice = volumeDevicePath(volDef)
-			val snapLv = volDef(lvName)+snapshotNameSuffix
-			val cmd = lvmUtilsPrefix+"sbin/lvcreate -L " + snapSize + " -s -n " + snapLv + " " + volDevice
-			val errCode = cmd ! logStdStuff
-			if (errCode != 0 )
-			{
-				fatal ("create snapshot of volume: " + volDevice)
-				unmountTargetVolumes(filesystems)
-				removeTargetVolumeSnapshots(filesystems)
-				System.exit(FATAL_LVM_CREATE)
-			}
-		}
-		filesystems map snapshotVol
-		info ("< create volume snapshots")
-	}
-
-	private def volumeDevicePath(volDef: Map[String,String]) = "/dev/" + getVGName + "/" + volDef(lvName)
-	private def mountDevicePath(volDef: Map[String, String]) = volumeDevicePath(volDef) + snapshotNameSuffix
-
-	private def removeTargetVolumeSnapshots(filesystems: List[Map[String, String]]) =
-	{
-		info ("> remove volume snapshots");
-		def snapshotVol(volDef : Map[String, String]) = 
-		{
-			val volDevice = getVGName + "/" + volDef(lvName) + snapshotNameSuffix
-			val cmd = lvmUtilsPrefix + "sbin/lvremove -f " + volDevice
-			val errCode = cmd ! logStdStuff  
-			if (errCode != 0 )
-			{
-				fatal ("removing snapshot: " + volDevice)
-				System.exit(ERROR_LVM_REMOVE)
-			}
-		}
-		filesystems map snapshotVol
-		info ("< remove volume snapshots")
-	}
-
-	private def isMounted(loc: String) = 
-	{
-		Process("mount").lines.exists(_.split("\\s+")(2) == loc)
-	}
-  
-	private def mountTargetVolumes(filesystems: List[Map[String, String]]) =
-	{
-		info ("> mount volume snapshots")
-		def mountLVM( volDef:Map[String, String] ) =
-		{			
-			val volume = mountDevicePath(volDef)
-			if (!volDef(mountPointSuffix).equals(""))
-			{
-				val mountPoint = snapshotRootMountPoint + volDef(mountPointSuffix).replaceAll("/$", "")
-				info ("mount attempt of volume: " + volume + " on mount point: " + mountPoint)
-				val mountCmd = "/bin/mount -oro " + volume + " " + mountPoint 
-				val errCode = mountCmd ! logStdStuff
-				if (errCode != 0 )
-				{
-					fatal ("mounting volume: " + volume + " at mountpoint: " + mountPoint + "  with command: " + mountCmd)
-					unmountTargetVolumes(filesystems)
-					removeTargetVolumeSnapshots(filesystems)
-					System.exit(FATAL_MOUNT)
-				}
-			}
-			else
-			{
-				info("volume: " + volume + "has no defined mount point, skipping mounting of volume");
-			}
-		}
-		filesystems map mountLVM
-		info ("< mount volume snapshots")
-	}
-  
-	private def unmountTargetVolumes(filesystems: List[Map[String, String]]) =
-	{
-		info ("> unmount volume snapshots")
-		def unmountLVM(volDef: Map[String, String] ) =
-		{
-			val volume = mountDevicePath(volDef)
-			if (!volDef(mountPointSuffix).equals(""))
-			{
-				val snapshotMountLoc = snapshotRootMountPoint + volDef(mountPointSuffix).replaceAll("/$", "")
-				info ("unmount attempt of volume: " + volume + " mounted at: " + snapshotMountLoc)
-				if (isMounted(snapshotMountLoc))
-				{
-					unmount(snapshotMountLoc)
-				}
-				else
-				{
-					info("no volume: " + volume + " mounted at: " + snapshotMountLoc + ": skipping")
-				}
-			}
-			else
-			{
-				info("volume: " + volume + "has no defined mount point, skipping unmount of volume");
-			}			
-		}
-		filesystems.reverse map unmountLVM
-		info ("< unmount volume snapshots")
-	}
-
-	private def unmount(loc: String) = 
-	{
-		val unmountCmd = "umount " + loc 
-		val errCode = unmountCmd ! logStdStuff
-		if (errCode != 0 )
-		{
-			error("unmounting at:  " + loc + " failed")
-		}
-	}
-
-	private def tar(out: java.io.OutputStream) = 
-	{
-		info ("> create tar of volume snapshots")
-		val mkExcludes = excludes map ( "--exclude=" + snapshotRootMountPoint + _ + "/* " ) mkString
-		val tarCmd = "tar -cz " + mkExcludes + " -C " + snapshotRootMountPoint + "/.. " + snapshotRootMountPoint 
-		info ("attemting tar of snapshot filesystem with command: " + tarCmd)
-		(Process(tarCmd) #> out).run.exitValue
-		info ("< create tar of volume snapshots")
-	}
-
-	private def lzma(volDef: Map[String, String], out: java.io.OutputStream) = 
-	{
-		val sourceSnapShotPath = mountDevicePath(volDef)
-		info ("> create lzma of volume snapshots")
-		val lzmaCmd = "/bin/cat " + sourceSnapShotPath + " |xz --format=lzma -c --lzma1=dict=128M -5 " 
-		info ("attemting tar of snapshot filesystem with command: " + lzmaCmd)
-		(Process(lzmaCmd) #> out).run.exitValue
-		info ("< create tar of volume snapshots")
-	}
-
-	private def pipeOutput(filesystems: List[Map[String, String]], out: java.io.OutputStream)
-	{
-		info ("> pipe of output")
-		def chooseOutputPipe( volDef:Map[String, String] ) =
-                {
-			if(volDef(lvName).contains("act"))
-			{	
-				lzma(volDef, out)
-			}
-			else
-			{
-				tar(out)
-			}
-		}
-		filesystems map chooseOutputPipe
-		info ("< pipe of output")
-	}
+  def destroyLv(lv: LvInfo) = { 
+    // _DO_ exception if retcode != 0
+    println ("deactivate")
+    println ("kill!!!")
+    ()
+  }
 }
 
-ArchSys.main(args)
+class LvInfo(val vg: String, val lv: String)
+
+object Volume {
+  def apply(mountInfo: Tuple2[String,String]) : Volume = {
+    val dev = mountInfo._1
+    val path = mountInfo._2
+    if (Sys.isLvmManaged(dev))
+      LvmVolume(dev,path)
+    else if (Sys.isBlockDevice(dev))
+      RawVolume(dev, path)
+    else 
+      throw new IllegalArgumentException("not a real block device: "+dev)
+  }
+
+  case class LvmVolume(dev: String, path: String) extends Volume(dev, path) {
+
+    val liveLv = Sys.getLvInfo(dev)
+    val snapLv = new LvInfo(
+      liveLv.vg,
+      liveLv.lv+"-snap" )
+
+    def acquire {
+      println("mount " + this)
+      Sys.createLvSnap(liveLv, snapLv)
+    }
+    def release = println ("unmount " + this)
+
+    override def toString = super.toString+":vg="+liveLv.vg+":lv="+liveLv.lv
+  }
+
+  case class RawVolume(dev: String, path: String) extends Volume(dev, path) {
+    def acquire = println("mount " + this)
+    def release = println ("unmount " + this)
+  }
+}
+
+/**
+ * Basic archival volume abstraction.  
+ * Can be acquired and released.
+ */
+abstract class Volume(dev: String, path: String) {
+  def acquire : Unit
+  def release : Unit
+
+  override def toString = getClass+":"+dev+"@"+path
+}
+
+
+def inspectMountPoint (mountPath: String) : Volume = { 
+  val mounts : Array[String] = Sys.mounts split "\n"
+
+  val filtered = mounts filter (
+    line => { 
+      val fields = line split " +" map (_.trim)
+      fields(2) == mountPath
+    }) 
+
+  val mountInfo : Array[Tuple2[String,String]] = filtered map (
+    line => {
+      val fields = line split " +" map (_.trim)
+      (fields(0), fields(2))
+    })
+
+  if (mountInfo.isEmpty) 
+    throw new IllegalArgumentException("nothing mounted at "+mountPath)
+
+  def stringify(mounts: Array[Tuple2[String,String]]) = 
+    mounts map (m => m._1+"@"+m._2) reduce (_+"\n"+_)
+
+  if (mountInfo.size > 1)
+    throw new IllegalStateException(
+      "more than one thing mounted at "+mountPath+".\n"+
+      "ambiguous host configuration.\n"+
+      stringify(mountInfo))
+
+  Volume(mountInfo(0))
+}
+
+case class Invocation(args: Array[String]) { 
+  private def getParam(name: String) = {
+    val prefix = "--"+name+"="
+    val params = args filter (_ startsWith prefix)
+    if (params.isEmpty || params.size > 1)
+      throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")   
+    else
+      params(0).replace(prefix, "")
+  }
+  lazy val readerType = getParam("readWith")
+  lazy val volumes = getParam("volumes") split ":" toList
+  lazy val mountAt = getParam("mountAt")
+}
+// --readWith=... --volumes=/:/usr:/var
+object Invocation extends Invocation(args)
+
+println (Invocation.readerType)
+println (Invocation.mountAt)
+println (Invocation.volumes)
+System.exit(0)
+
+val volumes : List[Volume] = Invoication.volumes map inspectMountPoint 
+
+object VolumeReader {
+    def apply(vols: List[Volume], howToRead: String) = { 
+      RsyncReader(vols.head)
+    }
+
+    /**
+     * RsyncReader requires an xinetd configuration to function.
+     * The configuration should be the same as regular rsync, but with
+     */
+    case class RsyncReader(vol: Volume) extends VolumeReader(vol) {
+      def read = ()
+    }
+    /**
+     * since BinaryReader does not require (and in fact abhors filesystem
+     * -level access, it only makes sense to use it if
+     * 1. only one volume is selected for backup
+     * 2. volume not mounted (or mounted r/o)
+     */
+    case class BinaryReader(vol: Volume) extends VolumeReader(vol) {
+      def read = ()
+    }
+    case class TarballReader(vol: Volume) extends VolumeReader(vol) {
+      def read = ()
+    }
+}
+/**
+ * if reader reads FSH, only root specified
+ * if reader reads block devs, max_size(volumes) == 1
+ */ 
+abstract class VolumeReader(vol: Volume){ 
+  def read : Unit // execs some system process on volume
+}
+
+val reader = VolumeReader(volumes, "thecmd")
+
+
+def loan(volumes: List[Volume]) : Unit = 
+  if (volumes.isEmpty)
+    reader.read // payload
+  else {
+    val vol = volumes.head
+    try {
+      vol.acquire
+      loan(volumes.tail)
+    }
+    finally {
+      vol.release
+    }
+  }
+
+loan(volumes)

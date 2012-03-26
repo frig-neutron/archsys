@@ -8,7 +8,6 @@ import java.nio._
 import java.net._
 import java.io._
 
-val commPort = 6666
 val clientSocket = System.inheritedChannel.asInstanceOf[SocketChannel]
 val serverSocket = SocketChannel.open
 
@@ -18,47 +17,60 @@ object DevNull extends ProcessLogger {
   def err(s: => String): Unit = ()
 }
 
-object Listener extends Thread with Closeable {
+object ServerProcess extends Thread with Closeable {
+  lazy val commPort = 6666  // TODO: find unused port by actually scanning system
   var proc : Process = null
   override def run {
-    proc = "rsync -v --port=6666 -4 --daemon --no-detach --log-file"+
-      "=/tmp/rsync.log" run DevNull
+    proc = 
+      "rsync -v --port="+commPort+
+      " -4 --daemon --no-detach --log-file=/tmp/rsync.log"+
+      " --log-file-format='%t: %f %n/%l xferred'" run DevNull
   }
   def close = proc.destroy
 }
 
-val buf = ByteBuffer.allocate(16 * 1024 * 1024) // 16 meg buffer
-def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) {
-  val bytesRead = src read buf
-  if (bytesRead == -1) 
-    throw new ClosedChannelException
-  buf.flip
-  dst write buf
-  buf.clear
-  Thread.sleep(100)
+object SocketJoin {
+
+  val buf = ByteBuffer.allocate(16 * 1024 * 1024) // 16 meg buffer 
+  private def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) {
+    val bytesRead = src read buf
+    if (bytesRead == -1) 
+      throw new ClosedChannelException
+    buf.flip
+    var bytesWritten = 0
+    while (bytesWritten < bytesRead)
+      bytesWritten += dst write buf
+    buf.clear
+  }
+
+  def proxy(sock: (SocketChannel, SocketChannel)) = {
+    sock._1.configureBlocking (false)
+    sock._2.configureBlocking (false)
+    while (true) { 
+      sockCat(sock._1, sock._2)
+      sockCat(sock._2, sock._1)
+    }
+  }
+
 }
 
 try {
-  Listener.run
-  Thread.sleep(500)
+  ServerProcess.run
+  // allow time for listener to open socket
+  Thread.sleep(500)  // TODO: insert poll here
 
   serverSocket.connect(
     new InetSocketAddress(
       "localhost",
-      commPort))
+      ServerProcess.commPort))
 
-  clientSocket.configureBlocking (false)
-  serverSocket.configureBlocking (false)
+  SocketJoin.proxy(serverSocket, clientSocket)
 
-  while (true) { 
-    sockCat(clientSocket, serverSocket)
-    sockCat(serverSocket, clientSocket)
-  }
 } finally { 
-  Listener.close
+  ServerProcess.close
+  if (clientSocket.isConnected) clientSocket.close
+  if (serverSocket.isConnected) serverSocket.close
 }
-// "rsync -v --port=666 -4 --daemon --no-detach" !! 
-
 
 /*
 Liveness problem:
@@ -86,9 +98,28 @@ Solutions:
     - nothing left to do but try
     Whohoo! seems to work w/ live rsync.
 
-
   Use some sort of concurrency mechanism: 
     - Java Threads?
     - Scala Actors?
+  SelectableChannel's non-blocking operation provides something simi-
+    lar to an explicitly concurrent approach.
 
+Rsync protocol corruption problem: 
+  Using anything but a small buffer in SocketJoin.sockCat 
+  introduces corruption into rsync protocol, breaking the data
+  transfer before completion w/ rsync err 12.
+
+  Workaround: use tiny buffer (1 byte works).
+  Drawback: transfer rate drops to about 200 KB/s
+
+  Cause: output buffer not completely flushed because socket config-
+    ured for non-blocking operation.
+  Solution: keep flushing output buffer until bufOut == bufIn
+  Alt solution: switch output socket to synchoronous operation before 
+    flushing.  Requires sockCat interface modification from 
+    {Readable,Writable}ByteChannel to {R,W}BC + SelectableChannel.
+    SelectableChannel provides blocking operation config interface.
+  Implementing first solution, because it is a bit easier. Alternate
+    solution may provide slightly better performance, though this 
+    really needs to be tested with the hard stick of measurement.
 */

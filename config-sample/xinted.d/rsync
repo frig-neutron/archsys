@@ -1,0 +1,14 @@
+service work-backup
+{
+  type = UNLISTED
+  protocol = tcp
+  wait = no
+  user = root
+  socket_type = stream
+  server = /home/frig_neutron/src/archsys/rsync.scala
+  port = 666
+  nice = 10
+  log_type = SYSLOG daemon
+  only_from = localhost
+  bind = 127.0.0.1
+}

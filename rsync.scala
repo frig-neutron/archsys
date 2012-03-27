@@ -56,13 +56,17 @@ object SocketJoin {
 
 try {
   ServerProcess.run
-  // allow time for listener to open socket
-  Thread.sleep(500)  // TODO: insert poll here
-
-  serverSocket.connect(
-    new InetSocketAddress(
-      "localhost",
-      ServerProcess.commPort))
+  // attempt to connect until succeeds
+  lazy val serverSocketAddress = new InetSocketAddress("localhost", ServerProcess.commPort)
+  while (
+    !{
+      try {
+        serverSocket.connect(serverSocketAddress)
+      } catch {
+        case e: IOException => false
+      }
+    }
+  ){ Thread.sleep(500) }
 
   SocketJoin.proxy(serverSocket, clientSocket)
 

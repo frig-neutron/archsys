@@ -56,19 +56,27 @@ object SocketJoin {
 
 try {
   ServerProcess.run
-  // attempt to connect until succeeds
-  lazy val serverSocketAddress = new InetSocketAddress("localhost", ServerProcess.commPort)
-  while (
-    !{
+  /*
+  * attempt to connect until succeeds in 0.5 seconds interval 
+  * just in case the server port is not up when we invoke SocketChannel.connect().
+  * according to documentation on SocketChannel, the socket channel is by default in
+  * blocking mode and therefore will block until it is connected. IOException is thrown
+  * if there are any I/O errors (like the specified socket address does not exist (yet)).
+  * this is our cue to try again. 
+  */
+  lazy val connected = {
+    def connect(socketAddress: InetSocketAddress, retry: Int): Boolean = {
       try {
-        serverSocket.connect(serverSocketAddress)
+        Thread.sleep(500)
+        serverSocket.connect(socketAddress)
       } catch {
-        case e: IOException => false
+        case e: IOException => if (retry <= 0) false else connect(socketAddress, retry-1)
       }
     }
-  ){ Thread.sleep(500) }
+    connect(new InetSocketAddress("localhost", ServerProcess.commPort), 5)
+  }
 
-  SocketJoin.proxy(serverSocket, clientSocket)
+  if (connected) SocketJoin.proxy(serverSocket, clientSocket)
 
 } finally { 
   ServerProcess.close

@@ -171,11 +171,11 @@ case class Invocation(args: Array[String]) {
     else
       params(0).replace(prefix, "")
   }
-  lazy val readerType = getParam("readWith")
+  lazy val readerType = getParam("howToRead")
   lazy val volumes = getParam("volumes") split ":" toList
   lazy val mountAt = getParam("mountAt")
 }
-// --readWith=... --volumes=/:/usr:/var
+// --howToRead=... --volumes=/:/usr:/var
 object Invocation extends Invocation(args)
 
 println (Invocation.readerType)
@@ -183,7 +183,7 @@ println (Invocation.mountAt)
 println (Invocation.volumes)
 System.exit(0)
 
-val volumes : List[Volume] = Invoication.volumes map inspectMountPoint 
+val volumes : List[Volume] = Invocation.volumes map inspectMountPoint 
 
 object VolumeReader {
     def apply(vols: List[Volume], howToRead: String) = { 

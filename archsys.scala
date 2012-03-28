@@ -91,32 +91,32 @@ object Volume {
     val dev = mountInfo._1
     val path = mountInfo._2
     if (Sys.isLvmManaged(dev))
-      LvmVolume(dev,path)
+      new LvmVolume(dev,path)
     else if (Sys.isBlockDevice(dev))
-      RawVolume(dev, path)
+      new RawVolume(dev, path)
     else 
       throw new IllegalArgumentException("not a real block device: "+dev)
   }
 
-  case class LvmVolume(dev: String, path: String) extends Volume(dev, path) {
-
+  class LvmVolume(dev: String, path: String) extends Volume(dev, path) {
     val liveLv = Sys.getLvInfo(dev)
     val snapLv = new LvInfo(
       liveLv.vg,
       liveLv.lv+"-snap" )
 
-    def acquire {
-      println("mount " + this)
-      Sys.createLvSnap(liveLv, snapLv)
-    }
-    def release = println ("unmount " + this)
+    protected def doAcquire = Sys.createLvSnap(liveLv, snapLv)
+    protected def doRelease = println ("release " + this)
+    protected def doMount(mountAt: String) = println("mount at " + mountAt + " " + this)
+    protected def doUnmount(mountAt: String) = println("unmount at " + mountAt + " " + this)
 
     override def toString = super.toString+":vg="+liveLv.vg+":lv="+liveLv.lv
   }
 
-  case class RawVolume(dev: String, path: String) extends Volume(dev, path) {
-    def acquire = println("mount " + this)
-    def release = println ("unmount " + this)
+  class RawVolume(dev: String, path: String) extends Volume(dev, path) {
+    protected def doAcquire = println("acquire " + this)
+    protected def doRelease = println ("release " + this)
+    protected def doMount(mountAt: String) = println("mount at " + mountAt + " " + this)
+    protected def doUnmount(mountAt: String) = println("unmount at " + mountAt + " " + this)
   }
 }
 
@@ -125,8 +125,25 @@ object Volume {
  * Can be acquired and released.
  */
 abstract class Volume(dev: String, path: String) {
-  def acquire : Unit
-  def release : Unit
+  protected def doAcquire : Unit
+  protected def doRelease : Unit
+  protected def doMount(mountAt: String) : Unit
+  protected def doUnmount(mountAt: String) : Unit
+
+  def acquire(r : VolumeReader) {
+    doAcquire
+    if (needsMounting(r)) {
+      doMount(r.mountAt)
+    }
+  }
+  private def needsMounting(r: VolumeReader) =
+    r.isInstanceOf[VolumeReader.TarballReader] || r.isInstanceOf[VolumeReader.RsyncReader]
+  def release (r: VolumeReader) {
+    if (needsMounting(r)) {
+      doUnmount(r.mountAt)
+    }
+    doRelease
+  }
 
   override def toString = getClass+":"+dev+"@"+path
 }
@@ -181,20 +198,24 @@ object Invocation extends Invocation(args)
 println (Invocation.readerType)
 println (Invocation.mountAt)
 println (Invocation.volumes)
-System.exit(0)
 
 val volumes : List[Volume] = Invocation.volumes map inspectMountPoint 
 
 object VolumeReader {
-    def apply(vols: List[Volume], howToRead: String) = { 
-      RsyncReader(vols.head)
+    def apply(howToRead: String, volumes: List[Volume], mountAt: String): VolumeReader = { 
+      howToRead match {
+        case "rsync" => new RsyncReader(volumes, mountAt)
+        case "binary" => new BinaryReader(volumes.head)
+        case "tarball" => new TarballReader(volumes, mountAt)
+        case _ => throw new IllegalArgumentException(howToRead+" is not a supported reader type.")
+      }
     }
 
     /**
      * RsyncReader requires an xinetd configuration to function.
      * The configuration should be the same as regular rsync, but with
      */
-    case class RsyncReader(vol: Volume) extends VolumeReader(vol) {
+    class RsyncReader(volumes: List[Volume], mountAt: String) extends VolumeReader(volumes, mountAt) {
       def read = ()
     }
     /**
@@ -203,10 +224,10 @@ object VolumeReader {
      * 1. only one volume is selected for backup
      * 2. volume not mounted (or mounted r/o)
      */
-    case class BinaryReader(vol: Volume) extends VolumeReader(vol) {
+    class BinaryReader(volume: Volume) extends VolumeReader(List(volume), null) {
       def read = ()
     }
-    case class TarballReader(vol: Volume) extends VolumeReader(vol) {
+    class TarballReader(volumes: List[Volume], mountAt: String) extends VolumeReader(volumes, mountAt) {
       def read = ()
     }
 }
@@ -214,11 +235,11 @@ object VolumeReader {
  * if reader reads FSH, only root specified
  * if reader reads block devs, max_size(volumes) == 1
  */ 
-abstract class VolumeReader(vol: Volume){ 
+abstract class VolumeReader(val volumes: List[Volume], val mountAt: String) { 
   def read : Unit // execs some system process on volume
 }
 
-val reader = VolumeReader(volumes, "thecmd")
+val reader = VolumeReader(Invocation.readerType, volumes, Invocation.mountAt)
 
 
 def loan(volumes: List[Volume]) : Unit = 
@@ -227,12 +248,12 @@ def loan(volumes: List[Volume]) : Unit =
   else {
     val vol = volumes.head
     try {
-      vol.acquire
+      vol acquire reader
       loan(volumes.tail)
     }
     finally {
-      vol.release
+      vol release reader
     }
   }
 
-loan(volumes)
+loan(reader.volumes)

@@ -240,20 +240,56 @@ abstract class VolumeReader(val volumes: List[Volume], val mountAt: String) {
 }
 
 val reader = VolumeReader(Invocation.readerType, volumes, Invocation.mountAt)
-
-
-def loan(volumes: List[Volume]) : Unit = 
-  if (volumes.isEmpty)
-    reader.read // payload
-  else {
-    val vol = volumes.head
-    try {
-      vol acquire reader
-      loan(volumes.tail)
-    }
-    finally {
-      vol release reader
-    }
+/**
+ * Loan pattern with duck typing for Closeable. Copied directly from 
+ * AVBS project.
+ */
+def using[Closeable <: {def close(): Unit}, B](closeable: Closeable)(getB: Closeable => B) : B = 
+  try {
+    getB(closeable)
+  } finally {
+    closeable.close()
   }
 
-loan(reader.volumes)
+def readVolumes(volumes: List[Volume]) {
+  if (volumes.isEmpty)
+    reader.read
+  else { 
+    volumes.head.acquire 
+    using(volumes.head) { vol => {
+        vol.acquire
+        readVolumes(volumes.tail)
+      }
+    }
+  }
+}
+
+readVolumes(reader.volumes)
+
+
+/*
+def loan(volumes: List[Volume]) : Unit = 
+    try {
+      if (volumes.isEmpty)
+        reader.read // payload
+      else {
+        volumes.head.acquire
+        loan(volumes.tail)
+      }
+    finally {
+      vol.release
+    }
+  }
+def readWithRsync = {
+  getClientSocket 
+  l2(clientSocket) { 
+    startServer
+    l2(serverProcess) { 
+      openServerSocket
+      l2(serverSocket) { 
+        // rarara
+      }
+    }
+  }
+*/
+

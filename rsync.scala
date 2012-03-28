@@ -8,8 +8,8 @@ import java.nio._
 import java.net._
 import java.io._
 
-val clientSocket = System.inheritedChannel.asInstanceOf[SocketChannel]
-val serverSocket = SocketChannel.open
+val clientToLocal = System.inheritedChannel.asInstanceOf[SocketChannel]
+val localToServer = SocketChannel.open
 
 object DevNull extends ProcessLogger { 
   def buffer[T](f: => T): T = f
@@ -18,7 +18,12 @@ object DevNull extends ProcessLogger {
 }
 
 object ServerProcess extends Thread with Closeable {
-  lazy val commPort = 6666  // TODO: find unused port by actually scanning system
+  lazy val commPort = {
+    val serverSocket = new ServerSocket(0)
+    val port = serverSocket.getLocalPort
+    serverSocket.close
+    port
+  }
   var proc : Process = null
   override def run {
     proc = 
@@ -68,7 +73,7 @@ try {
     def connect(socketAddress: InetSocketAddress, retry: Int): Boolean = {
       try {
         Thread.sleep(500)
-        serverSocket.connect(socketAddress)
+        localToServer.connect(socketAddress)
       } catch {
         case e: IOException => if (retry <= 0) false else connect(socketAddress, retry-1)
       }
@@ -76,12 +81,12 @@ try {
     connect(new InetSocketAddress("localhost", ServerProcess.commPort), 5)
   }
 
-  if (connected) SocketJoin.proxy(serverSocket, clientSocket)
+  if (connected) SocketJoin.proxy(clientToLocal, localToServer)
 
 } finally { 
   ServerProcess.close
-  if (clientSocket.isConnected) clientSocket.close
-  if (serverSocket.isConnected) serverSocket.close
+  if (clientToLocal != null) clientToLocal.close
+  if (localToServer != null) localToServer.close
 }
 
 /*

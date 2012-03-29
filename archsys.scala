@@ -90,6 +90,16 @@ object Sys {
     // _DO_ exception if retcode != 0
     println("lvremove -f "+vg+"/"+lv)
   }
+
+  // _DO_ exception if retcode != 0
+  def tar(path: String) {
+    println("tar -cf - "+path)
+  }
+
+  // _DO_ exception if retcode != 0
+  def dd(dev: String) {
+    println("dd if="+dev)
+  }
 }
 
 
@@ -154,7 +164,7 @@ object Volume {
  * Basic archival volume abstraction.  
  * Can be acquired and released.
  */
-abstract class Volume(dev: String, path: String, reader: VolumeReader) {
+abstract class Volume(val dev: String, val path: String, val reader: VolumeReader) {
   protected def doAcquire() : Unit
   protected def doRelease() : Unit
   protected def doMount() : Unit
@@ -230,10 +240,10 @@ object VolumeReader {
      * 2. volume not mounted (or mounted r/o)
      */
     class BinaryReader extends VolumeReader(null, false) {
-      def read(vol: Volume) = ()
+      def read(vol: Volume) = Sys.dd(vol.dev)
     }
     class TarballReader(mountAt: String) extends VolumeReader(mountAt, true) {
-      def read(vol: Volume) = ()
+      def read(vol: Volume) = Sys.tar(mountAt)
     }
 }
 /**

@@ -65,19 +65,30 @@ object Sys {
     (bits(1), bits(0))
   }
 
-  def createLvSnap(vg: String, srcLv: String, dstLv: String) : Unit = {
+  def createLvSnap(vg: String, srcLv: String, dstLv: String) {
     // _DO_ exception if retcode != 0
-    println ("lvcreate -L 2G --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv)
+    println("lvcreate -L 2G --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv)
   }
 
   // _DO_ exception if retcode != 0
-  def mount(dev: String, path: String) = ()
+  def mount(dev: String, path: String) {
+    println("mount -o ro "+dev+" "+path)
+  }
+
+  // _DO_ exception if retcode != 0
+  def mountBind(srcPath: String, dstPath: String) {
+    println("mount --bind "+srcPath+" "+dstPath)
+    println("mount -o remount,ro "+dstPath)
+  }
+
+  // _DO_ exception if retcode != 0
+  def unmount(path: String) {
+    println("umount "+path)
+  }
 
   def destroyLv(vg: String, lv: String) = { 
     // _DO_ exception if retcode != 0
-    println ("deactivate")
-    println ("kill!!!")
-    ()
+    println("lvremove -f "+vg+"/"+lv)
   }
 }
 
@@ -124,9 +135,9 @@ object Volume {
     val snapLv = liveLv+"-snap"
 
     protected def doAcquire() = Sys.createLvSnap(vg, liveLv, snapLv)
-    protected def doRelease() = println ("release " + this)
-    protected def doMount() = println("mount " + this)
-    protected def doUnmount() = println("unmount " + this)
+    protected def doRelease() = Sys.destroyLv(vg, snapLv)
+    protected def doMount() = Sys.mount("/dev/"+vg+"/"+snapLv, reader.mountAt+path)
+    protected def doUnmount() = Sys.unmount(reader.mountAt+path)
 
     override def toString = super.toString+":vg="+vg+":lv="+liveLv
   }
@@ -134,8 +145,8 @@ object Volume {
   class RawVolume(dev: String, path: String, reader: VolumeReader) extends Volume(dev, path, reader) {
     protected def doAcquire() = println("acquire " + this)
     protected def doRelease() = println ("release " + this)
-    protected def doMount() = println("mount " + this)
-    protected def doUnmount() = println("unmount " + this)
+    protected def doMount() = Sys.mountBind(path, reader.mountAt+path)
+    protected def doUnmount() = Sys.unmount(reader.mountAt+path)
   }
 }
 
@@ -244,7 +255,7 @@ def using[Closeable <: {def close(): Unit}, B](closeable: Closeable)(getB: Close
     closeable.close()
   }
 
-val first = volumes(0)
+val first = volumes head
 
 def readVolumes(volumes: List[Volume]) {
   if (volumes.isEmpty)

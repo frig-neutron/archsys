@@ -51,7 +51,7 @@ object Sys {
   def isBlockDevice(dev: String) = {
     val log = new StringProcessLogger
     "file -b "+dev ! log // don't exception if retcode != 0
-    log.getOut == "block special"
+    log.getOutLines(0) == "block special"
   }
 
   def isLvmManaged(dev: String) = 
@@ -174,9 +174,16 @@ case class Invocation(args: Array[String]) {
     else
       params(0).replace(prefix, "")
   }
-  lazy val readerType = getParam("howToRead")
+  private def getReaderTypeAndMountLocation(howToRead: Seq[Char]): Tuple2[String, String] = {
+    howToRead match {
+      case Seq('r','s','y','n','c',':',mountAt @ _*) if (! mountAt.isEmpty) => ("rsync", mountAt.mkString)
+      case Seq('t','a','r',':',mountAt @ _*) if (! mountAt.isEmpty) => ("tar", mountAt.mkString)
+      case Seq('d','d') => ("dd", null)
+      case _ => throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")
+    }
+  }
+  lazy val (readerType, mountAt) = getReaderTypeAndMountLocation(getParam("howToRead"))
   lazy val volumes = getParam("volumes") split ":" toList
-  lazy val mountAt = getParam("mountAt")
 }
 // --howToRead=... --volumes=/:/usr:/var
 object Invocation extends Invocation(args)
@@ -185,15 +192,15 @@ println (Invocation.readerType)
 println (Invocation.mountAt)
 println (Invocation.volumes)
 
-val volumes : List[Volume] = Invocation.volumes map (Volume(_)) 
-val reader = VolumeReader(Invocation.readerType, volumes, Invocation.mountAt)
+val reader = VolumeReader(Invocation.readerType, Invocation.mountAt)
+val volumes : List[Volume] = Invocation.volumes map (Volume(_, reader)) 
 
 object VolumeReader {
-    def apply(howToRead: String, volumes: List[Volume], mountAt: String): VolumeReader = { 
+    def apply(howToRead: String, mountAt: String): VolumeReader = { 
       howToRead match {
-        case "rsync" => new RsyncReader(volumes, mountAt)
-        case "binary" => new BinaryReader(volumes.head)
-        case "tarball" => new TarballReader(volumes, mountAt)
+        case "rsync" => new RsyncReader(mountAt)
+        case "dd" => new BinaryReader
+        case "tar" => new TarballReader(mountAt)
         case _ => throw new IllegalArgumentException(howToRead+" is not a supported reader type.")
       }
     }
@@ -202,8 +209,8 @@ object VolumeReader {
      * RsyncReader requires an xinetd configuration to function.
      * The configuration should be the same as regular rsync, but with
      */
-    class RsyncReader(volumes: List[Volume], mountAt: String) extends VolumeReader(volumes, mountAt, true) {
-      def read = ()
+    class RsyncReader(mountAt: String) extends VolumeReader(mountAt, true) {
+      def read(vol: Volume) = ()
     }
     /**
      * since BinaryReader does not require (and in fact abhors filesystem
@@ -211,19 +218,19 @@ object VolumeReader {
      * 1. only one volume is selected for backup
      * 2. volume not mounted (or mounted r/o)
      */
-    class BinaryReader(volume: Volume) extends VolumeReader(List(volume), null, false) {
-      def read = ()
+    class BinaryReader extends VolumeReader(null, false) {
+      def read(vol: Volume) = ()
     }
-    class TarballReader(volumes: List[Volume], mountAt: String) extends VolumeReader(volumes, mountAt, true) {
-      def read = ()
+    class TarballReader(mountAt: String) extends VolumeReader(mountAt, true) {
+      def read(vol: Volume) = ()
     }
 }
 /**
  * if reader reads FSH, only root specified
  * if reader reads block devs, max_size(volumes) == 1
  */ 
-abstract class VolumeReader(val volumes: List[Volume], val mountAt: String, val needsMounting: Boolean) { 
-  def read : Unit // execs some system process on volume
+abstract class VolumeReader(val mountAt: String, val needsMounting: Boolean) { 
+  def read(vol: Volume) : Unit // execs some system process on volume
 }
 
 /**
@@ -237,9 +244,11 @@ def using[Closeable <: {def close(): Unit}, B](closeable: Closeable)(getB: Close
     closeable.close()
   }
 
+val first = volumes(0)
+
 def readVolumes(volumes: List[Volume]) {
   if (volumes.isEmpty)
-    reader.read
+    reader read first
   else { 
     using(volumes.head) { vol => {
         vol.acquire
@@ -249,32 +258,6 @@ def readVolumes(volumes: List[Volume]) {
   }
 }
 
-readVolumes(reader.volumes)
+readVolumes(volumes)
 
-
-/*
-def loan(volumes: List[Volume]) : Unit = 
-    try {
-      if (volumes.isEmpty)
-        reader.read // payload
-      else {
-        volumes.head.acquire
-        loan(volumes.tail)
-      }
-    finally {
-      vol.release
-    }
-  }
-def readWithRsync = {
-  getClientSocket 
-  l2(clientSocket) { 
-    startServer
-    l2(serverProcess) { 
-      openServerSocket
-      l2(serverSocket) { 
-        // rarara
-      }
-    }
-  }
-*/
 

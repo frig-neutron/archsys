@@ -86,14 +86,14 @@ object Sys {
   }
 
   // _DO_ exception if retcode != 0
-  def mount(dev: String, path: String) {
-    println("mount -o ro "+dev+" "+path)
-  }
-
-  // _DO_ exception if retcode != 0
-  def mountBind(srcPath: String, dstPath: String) {
-    println("mount --bind "+srcPath+" "+dstPath)
-    println("mount -o remount,ro "+dstPath)
+  def mount(src: String, path: String) {
+    if (isBlockDevice(src)) {
+      println("mount -o ro "+src+" "+path)
+    }
+    else {
+      println("mount --bind "+src+" "+path)
+      println("mount -o remount,ro "+path)
+    }
   }
 
   // _DO_ exception if retcode != 0
@@ -108,12 +108,12 @@ object Sys {
 
   // _DO_ exception if retcode != 0
   def tar(path: String) {
-    println("tar -cf - "+path)
+    println("tar -c "+path+" | xz")
   }
 
   // _DO_ exception if retcode != 0
   def dd(dev: String) {
-    println("dd if="+dev)
+    println("dd if="+dev+" | xz")
   }
 }
 
@@ -171,9 +171,9 @@ object Volume {
   }
 
   class RawVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
-    protected def doAcquire() = println("acquire " + this)
-    protected def doRelease() = println ("release " + this)
-    protected def doMount() = Sys.mountBind(path, mountAt+path)
+    protected def doAcquire() = ()
+    protected def doRelease() = ()
+    protected def doMount() = Sys.mount(path, mountAt+path)
     protected def doUnmount() = Sys.unmount(mountAt+path)
   }
 }
@@ -235,10 +235,6 @@ case class Invocation(args: Array[String]) {
 }
 // --howToRead=... --volumes=/:/usr:/var
 object Invocation extends Invocation(args)
-
-println (Invocation.readerType)
-println (Invocation.mountAt)
-println (Invocation.volumes)
 
 val volumes : List[Volume] = Invocation.volumes map (Volume(_, Invocation.mountAt)) 
 val reader = VolumeReader(Invocation.readerType, volumes)

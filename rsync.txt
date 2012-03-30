@@ -1,0 +1,49 @@
+Liveness problem:
+  Revision f9d48cbef268a47706f9ef51450a35965bb06fbd has a problem  
+  in that the server and client must talk in strictly alternating 
+  turns.  If the server talks and then talks again, the client will
+  not get the message because the main app thread will be blocked 
+  listening to the client socket. The client may eventually get the 
+  second message from the server, but only if it decides to say 
+  something (unblocking the main thread in doing so).  Since the 
+  client is not guaranteed to say something, we have a potential
+  deadlock.  The problem is symmetrical from the perspective of the
+  client.
+
+Solutions: 
+  Configure the NIO SocketChannels for non-blocking reads.
+    - From SocketChannel.read javadoc: 
+      "If another thread has already initiated a read operation 
+       upon this channel, however, then an invocation of this method 
+       will block until the first operation is complete."
+    - From SelectableChannel description: 
+      "In non-blocking mode an I/O operation will never block and 
+       may transfer fewer bytes than were requested or possibly no 
+       bytes at all. "
+    - nothing left to do but try
+    Whohoo! seems to work w/ live rsync.
+
+  Use some sort of concurrency mechanism: 
+    - Java Threads?
+    - Scala Actors?
+  SelectableChannel's non-blocking operation provides something simi-
+    lar to an explicitly concurrent approach.
+
+Rsync protocol corruption problem: 
+  Using anything but a small buffer in SocketJoin.sockCat 
+  introduces corruption into rsync protocol, breaking the data
+  transfer before completion w/ rsync err 12.
+
+  Workaround: use tiny buffer (1 byte works).
+  Drawback: transfer rate drops to about 200 KB/s
+
+  Cause: output buffer not completely flushed because socket config-
+    ured for non-blocking operation.
+  Solution: keep flushing output buffer until bufOut == bufIn
+  Alt solution: switch output socket to synchoronous operation before 
+    flushing.  Requires sockCat interface modification from 
+    {Readable,Writable}ByteChannel to {R,W}BC + SelectableChannel.
+    SelectableChannel provides blocking operation config interface.
+  Implementing first solution, because it is a bit easier. Alternate
+    solution may provide slightly better performance, though this 
+    really needs to be tested with the hard stick of measurement.

@@ -21,7 +21,8 @@ implicit def arrayToList[A](arr: Array[A]) = arr.toList
  */
 object Sys {
   import scala.sys.process._
-  import java.io.File
+  import java.io.{File, Closeable}
+  import java.net._
 
   implicit def stringToFile(path: String) : File = new File(path)
   implicit def stringBuilderToString(strb: StringBuilder) : String = strb.toString
@@ -30,6 +31,20 @@ object Sys {
     def buffer[T](f: => T): T = f
     def out(s: => String): Unit = ()
     def err(s: => String): Unit = ()
+  }
+
+  object ServerProcess extends Thread with Closeable {
+    lazy val commPort = using(new ServerSocket(0)) {
+      socket => socket.getLocalPort
+    }
+    var proc : Process = null
+    override def run {
+      proc = 
+        "rsync -v --port="+commPort+
+        " -4 --daemon --no-detach --log-file=/tmp/rsync.log"+
+        " --log-file-format='%t: %f %n/%l xferred'" run DevNull
+    }
+    def close = proc.destroy
   }
 
   class StringProcessLogger extends ProcessLogger {
@@ -243,7 +258,70 @@ object VolumeReader {
      * The configuration should be the same as regular rsync, but with
      */
     class RsyncReader(volumes: List[Volume]) extends VolumeReader(volumes) {
-      def read() = ()
+      import java.nio.channels._
+      import java.nio._
+      import java.net._
+      import java.io._
+
+      object SocketJoin {
+
+        val buf = ByteBuffer.allocate(16 * 1024 * 1024) // 16 meg buffer 
+        private def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) {
+          val bytesRead = src read buf
+          if (bytesRead == -1) 
+            throw new ClosedChannelException
+          buf.flip
+          var bytesWritten = 0
+          while (bytesWritten < bytesRead)
+            bytesWritten += dst write buf
+          buf.clear
+        }
+
+        def proxy(sock: (SocketChannel, SocketChannel)) = {
+          sock._1.configureBlocking (false)
+          sock._2.configureBlocking (false)
+          while (true) { 
+            sockCat(sock._1, sock._2)
+            sockCat(sock._2, sock._1)
+          }
+        }
+      }
+
+      def read() = 
+        using(System.inheritedChannel.asInstanceOf[SocketChannel]) {
+          clientToLocal => {
+            using(Sys.ServerProcess) {
+              server => {
+                using(SocketChannel.open) {
+                  localToServer => {
+                    server.run
+                    /*
+                    * attempt to connect until succeeds in 0.5 seconds interval 
+                    * just in case the server port is not up when we invoke SocketChannel.connect().
+                    * according to documentation on SocketChannel, the socket channel is by default in
+                    * blocking mode and therefore will block until it is connected. IOException is thrown
+                    * if there are any I/O errors (like the specified socket address does not exist (yet)).
+                    * this is our cue to try again. 
+                    */
+                    lazy val connected = {
+                      def connect(socketAddress: InetSocketAddress, retry: Int): Boolean = {
+                        try {
+                          Thread.sleep(500)
+                          localToServer.connect(socketAddress)
+                        } catch {
+                          case e: IOException => if (retry <= 0) false else connect(socketAddress, retry-1)
+                        }
+                      }
+                      connect(new InetSocketAddress("localhost", Sys.ServerProcess.commPort), 5)
+                    }
+
+                    if (connected) SocketJoin.proxy(clientToLocal, localToServer)
+                  }
+                }
+              }
+            }
+          }
+        }
     }
     /**
      * since BinaryReader does not require (and in fact abhors filesystem

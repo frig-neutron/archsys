@@ -225,15 +225,15 @@ println (Invocation.readerType)
 println (Invocation.mountAt)
 println (Invocation.volumes)
 
-val reader = VolumeReader(Invocation.readerType)
 val volumes : List[Volume] = Invocation.volumes map (Volume(_, Invocation.mountAt)) 
+val reader = VolumeReader(Invocation.readerType, volumes)
 
 object VolumeReader {
-    def apply(howToRead: String): VolumeReader = { 
+    def apply(howToRead: String, volumes: List[Volume]): VolumeReader = { 
       howToRead match {
-        case "rsync" => new RsyncReader
-        case "dd" => new BinaryReader
-        case "tar" => new TarballReader
+        case "rsync" => new RsyncReader(volumes)
+        case "dd" => new BinaryReader(List(volumes.head))
+        case "tar" => new TarballReader(volumes)
         case _ => throw new IllegalArgumentException(howToRead+" is not a supported reader type.")
       }
     }
@@ -242,8 +242,8 @@ object VolumeReader {
      * RsyncReader requires an xinetd configuration to function.
      * The configuration should be the same as regular rsync, but with
      */
-    class RsyncReader extends VolumeReader {
-      def read(vol: Volume) = ()
+    class RsyncReader(volumes: List[Volume]) extends VolumeReader(volumes) {
+      def read() = ()
     }
     /**
      * since BinaryReader does not require (and in fact abhors filesystem
@@ -251,19 +251,19 @@ object VolumeReader {
      * 1. only one volume is selected for backup
      * 2. volume not mounted (or mounted r/o)
      */
-    class BinaryReader extends VolumeReader {
-      def read(vol: Volume) = Sys.dd(vol.getDevForReading)
+    class BinaryReader(volumes: List[Volume]) extends VolumeReader(volumes) {
+      def read() = Sys.dd(volumes.head.getDevForReading)
     }
-    class TarballReader extends VolumeReader {
-      def read(vol: Volume) = Sys.tar(vol.getMountLocation)
+    class TarballReader(volumes: List[Volume]) extends VolumeReader(volumes) {
+      def read() = Sys.tar(volumes.head.getMountLocation)
     }
 }
 /**
  * if reader reads FSH, only root specified
  * if reader reads block devs, max_size(volumes) == 1
  */ 
-abstract class VolumeReader { 
-  def read(vol: Volume) : Unit // execs some system process on volume
+abstract class VolumeReader(val volumes: List[Volume]) { 
+  def read() : Unit // execs some system process on volume
 }
 
 /**
@@ -281,7 +281,7 @@ val first = volumes head
 
 def readVolumes(volumes: List[Volume]) {
   if (volumes.isEmpty)
-    reader read first
+    reader.read
   else { 
     using(volumes.head) { vol => {
         vol.acquire
@@ -291,6 +291,6 @@ def readVolumes(volumes: List[Volume]) {
   }
 }
 
-readVolumes(volumes)
+readVolumes(reader.volumes)
 
 

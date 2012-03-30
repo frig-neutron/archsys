@@ -82,38 +82,43 @@ object Sys {
 
   def createLvSnap(vg: String, srcLv: String, dstLv: String) {
     // _DO_ exception if retcode != 0
-    println("lvcreate -L 2G --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv)
+    execute("lvcreate -L 2G --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv)
+  }
+
+  private def execute(cmd: String) {
+    val status = Process(cmd).!
+    if (status != 0) throw new IllegalStateException(cmd+" failed with exit code "+status)
   }
 
   // _DO_ exception if retcode != 0
   def mount(src: String, path: String) {
     if (isBlockDevice(src)) {
-      println("mount -o ro "+src+" "+path)
+      execute("mount -o ro "+src+" "+path)
     }
     else {
-      println("mount --bind "+src+" "+path)
-      println("mount -o remount,ro "+path)
+      execute("mount --bind "+src+" "+path)
+      execute("mount -o remount,ro "+path)
     }
   }
 
   // _DO_ exception if retcode != 0
   def unmount(path: String) {
-    println("umount "+path)
+    execute("umount "+path)
   }
 
   def destroyLv(vg: String, lv: String) { 
     // _DO_ exception if retcode != 0
-    println("lvremove -f "+vg+"/"+lv)
+    execute("lvremove -f "+vg+"/"+lv)
   }
 
   // _DO_ exception if retcode != 0
   def tar(path: String) {
-    println("tar -c "+path+" | xz")
+    execute("tar -c "+path+" | xz")
   }
 
   // _DO_ exception if retcode != 0
   def dd(dev: String) {
-    println("dd if="+dev+" | xz")
+    execute("dd if="+dev+" | xz")
   }
 }
 

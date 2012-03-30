@@ -50,7 +50,7 @@ object Sys {
 
   def isBlockDevice(dev: String) = {
     val log = new StringProcessLogger
-    "file -b "+dev ! log // don't exception if retcode != 0
+    "file -bL "+dev ! log // don't exception if retcode != 0
     log.getOutLines(0) == "block special"
   }
 

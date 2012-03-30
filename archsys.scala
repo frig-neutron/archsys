@@ -86,7 +86,7 @@ object Sys {
     println("umount "+path)
   }
 
-  def destroyLv(vg: String, lv: String) = { 
+  def destroyLv(vg: String, lv: String) { 
     // _DO_ exception if retcode != 0
     println("lvremove -f "+vg+"/"+lv)
   }
@@ -145,10 +145,10 @@ object Volume {
     val snapLv = liveLv+"-snap"
     val snapDev = "/dev/"+vg+"/"+snapLv
 
-    protected def doAcquire() = Sys.createLvSnap(vg, liveLv, snapLv)
-    protected def doRelease() = Sys.destroyLv(vg, snapLv)
-    protected def doMount() = Sys.mount(snapDev, reader.mountAt+path)
-    protected def doUnmount() = Sys.unmount(reader.mountAt+path)
+    protected def doAcquire() = { Sys.createLvSnap(vg, liveLv, snapLv); true }
+    protected def doRelease() = { Sys.destroyLv(vg, snapLv); true }
+    protected def doMount() = { Sys.mount(snapDev, reader.mountAt+path); true }
+    protected def doUnmount() = { Sys.unmount(reader.mountAt+path); true }
 
     override def getDevForReading = if (Sys.isLvmManaged(snapDev)) snapDev else super.getDevForReading
 
@@ -156,10 +156,10 @@ object Volume {
   }
 
   class RawVolume(dev: String, path: String, reader: VolumeReader) extends Volume(dev, path, reader) {
-    protected def doAcquire() = println("acquire " + this)
-    protected def doRelease() = println ("release " + this)
-    protected def doMount() = Sys.mountBind(path, reader.mountAt+path)
-    protected def doUnmount() = Sys.unmount(reader.mountAt+path)
+    protected def doAcquire() = { println("acquire " + this); true }
+    protected def doRelease() = { println ("release " + this); true }
+    protected def doMount() = { Sys.mountBind(path, reader.mountAt+path); true }
+    protected def doUnmount() = { Sys.unmount(reader.mountAt+path); true }
   }
 }
 
@@ -168,24 +168,29 @@ object Volume {
  * Can be acquired and released.
  */
 abstract class Volume(dev: String, path: String, reader: VolumeReader) {
-  protected def doAcquire() : Unit
-  protected def doRelease() : Unit
-  protected def doMount() : Unit
-  protected def doUnmount() : Unit
+  private var acquired = false
+  private var mounted = false
+
+  protected def doAcquire() : Boolean
+  protected def doRelease() : Boolean
+  protected def doMount() : Boolean
+  protected def doUnmount() : Boolean
 
   def getDevForReading = dev
 
   def acquire() {
-    doAcquire()
+    acquired = doAcquire()
     if (reader.needsMounting) {
-      doMount()
+      mounted = doMount()
     }
   }
   def close () {
-    if (reader.needsMounting) {
-      doUnmount()
+    if (mounted) {
+      mounted = ! doUnmount()
     }
-    doRelease()
+    if (acquired) {
+      acquired = ! doRelease()
+    }
   }
 
   override def toString = getClass+":"+dev+"@"+path

@@ -8,21 +8,9 @@ import java.nio._
 import java.net._
 import java.io._
 
-val clientToLocal = System.inheritedChannel.asInstanceOf[SocketChannel]
-val localToServer = SocketChannel.open
-
-object DevNull extends ProcessLogger { 
-  def buffer[T](f: => T): T = f
-  def out(s: => String): Unit = ()
-  def err(s: => String): Unit = ()
-}
-
 object ServerProcess extends Thread with Closeable {
-  lazy val commPort = {
-    val serverSocket = new ServerSocket(0)
-    val port = serverSocket.getLocalPort
-    serverSocket.close
-    port
+  lazy val commPort = using(new ServerSocket(0)) {
+    socket => socket.getLocalPort
   }
   var proc : Process = null
   override def run {
@@ -32,6 +20,12 @@ object ServerProcess extends Thread with Closeable {
       " --log-file-format='%t: %f %n/%l xferred'" run DevNull
   }
   def close = proc.destroy
+}
+
+object DevNull extends ProcessLogger { 
+  def buffer[T](f: => T): T = f
+  def out(s: => String): Unit = ()
+  def err(s: => String): Unit = ()
 }
 
 object SocketJoin {
@@ -59,35 +53,51 @@ object SocketJoin {
 
 }
 
-try {
-  ServerProcess.run
-  /*
-  * attempt to connect until succeeds in 0.5 seconds interval 
-  * just in case the server port is not up when we invoke SocketChannel.connect().
-  * according to documentation on SocketChannel, the socket channel is by default in
-  * blocking mode and therefore will block until it is connected. IOException is thrown
-  * if there are any I/O errors (like the specified socket address does not exist (yet)).
-  * this is our cue to try again. 
-  */
-  lazy val connected = {
-    def connect(socketAddress: InetSocketAddress, retry: Int): Boolean = {
-      try {
-        Thread.sleep(500)
-        localToServer.connect(socketAddress)
-      } catch {
-        case e: IOException => if (retry <= 0) false else connect(socketAddress, retry-1)
+using(System.inheritedChannel.asInstanceOf[SocketChannel]) {
+  clientToLocal => {
+    using(ServerProcess) {
+      server => {
+        using(SocketChannel.open) {
+          localToServer => {
+            server.run
+            /*
+            * attempt to connect until succeeds in 0.5 seconds interval 
+            * just in case the server port is not up when we invoke SocketChannel.connect().
+            * according to documentation on SocketChannel, the socket channel is by default in
+            * blocking mode and therefore will block until it is connected. IOException is thrown
+            * if there are any I/O errors (like the specified socket address does not exist (yet)).
+            * this is our cue to try again. 
+            */
+            lazy val connected = {
+              def connect(socketAddress: InetSocketAddress, retry: Int): Boolean = {
+                try {
+                  Thread.sleep(500)
+                  localToServer.connect(socketAddress)
+                } catch {
+                  case e: IOException => if (retry <= 0) false else connect(socketAddress, retry-1)
+                }
+              }
+              connect(new InetSocketAddress("localhost", ServerProcess.commPort), 5)
+            }
+
+            if (connected) SocketJoin.proxy(clientToLocal, localToServer)
+          }
+        }
       }
     }
-    connect(new InetSocketAddress("localhost", ServerProcess.commPort), 5)
   }
-
-  if (connected) SocketJoin.proxy(clientToLocal, localToServer)
-
-} finally { 
-  ServerProcess.close
-  if (clientToLocal != null) clientToLocal.close
-  if (localToServer != null) localToServer.close
 }
+
+/**
+ * Loan pattern with duck typing for Closeable. Copied directly from 
+ * AVBS project.
+ */
+def using[Closeable <: {def close(): Unit}, B](closeable: Closeable)(getB: Closeable => B) : B = 
+  try {
+    getB(closeable)
+  } finally {
+    closeable.close()
+  }
 
 /*
 Liveness problem:

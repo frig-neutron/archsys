@@ -104,7 +104,7 @@ object Sys {
 
 
 object Volume {
-  def apply(mountPath: String, reader: VolumeReader) : Volume = { 
+  def apply(mountPath: String, mountAt: String) : Volume = { 
     val mounts : Array[String] = Sys.mounts split "\n"
 
     val filtered = mounts filter (
@@ -133,33 +133,33 @@ object Volume {
 
     val (dev, path) = mountInfo(0)
     if (Sys.isLvmManaged(dev))
-      new LvmVolume(dev, path, reader)
+      new LvmVolume(dev, path, mountAt)
     else if (Sys.isBlockDevice(dev))
-      new RawVolume(dev, path, reader)
+      new RawVolume(dev, path, mountAt)
     else 
       throw new IllegalArgumentException("not a real block device: "+dev)
   }
 
-  class LvmVolume(dev: String, path: String, reader: VolumeReader) extends Volume(dev, path, reader) {
+  class LvmVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
     val (vg, liveLv) = Sys.getLvInfo(dev)
     val snapLv = liveLv+"-snap"
     val snapDev = "/dev/"+vg+"/"+snapLv
 
-    protected def doAcquire() = { Sys.createLvSnap(vg, liveLv, snapLv); true }
-    protected def doRelease() = { Sys.destroyLv(vg, snapLv); true }
-    protected def doMount() = { Sys.mount(snapDev, reader.mountAt+path); true }
-    protected def doUnmount() = { Sys.unmount(reader.mountAt+path); true }
+    protected def doAcquire() = Sys.createLvSnap(vg, liveLv, snapLv)
+    protected def doRelease() = Sys.destroyLv(vg, snapLv)
+    protected def doMount() = Sys.mount(snapDev, mountAt+path)
+    protected def doUnmount() = Sys.unmount(mountAt+path)
 
     override def getDevForReading = if (Sys.isLvmManaged(snapDev)) snapDev else super.getDevForReading
 
     override def toString = super.toString+":vg="+vg+":lv="+liveLv
   }
 
-  class RawVolume(dev: String, path: String, reader: VolumeReader) extends Volume(dev, path, reader) {
-    protected def doAcquire() = { println("acquire " + this); true }
-    protected def doRelease() = { println ("release " + this); true }
-    protected def doMount() = { Sys.mountBind(path, reader.mountAt+path); true }
-    protected def doUnmount() = { Sys.unmount(reader.mountAt+path); true }
+  class RawVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
+    protected def doAcquire() = println("acquire " + this)
+    protected def doRelease() = println ("release " + this)
+    protected def doMount() = Sys.mountBind(path, mountAt+path)
+    protected def doUnmount() = Sys.unmount(mountAt+path)
   }
 }
 
@@ -167,29 +167,31 @@ object Volume {
  * Basic archival volume abstraction.  
  * Can be acquired and released.
  */
-abstract class Volume(dev: String, path: String, reader: VolumeReader) {
+abstract class Volume(dev: String, path: String, mountAt: String) {
   private var acquired = false
   private var mounted = false
 
-  protected def doAcquire() : Boolean
-  protected def doRelease() : Boolean
-  protected def doMount() : Boolean
-  protected def doUnmount() : Boolean
+  protected def doAcquire() : Unit
+  protected def doRelease() : Unit
+  protected def doMount() : Unit
+  protected def doUnmount() : Unit
 
   def getDevForReading = dev
 
+  def getMountLocation = mountAt
+
   def acquire() {
-    acquired = doAcquire()
-    if (reader.needsMounting) {
-      mounted = doMount()
+    acquired = { doAcquire(); true }
+    if (mountAt != null) {
+      mounted = { doMount(); true }
     }
   }
   def close () {
     if (mounted) {
-      mounted = ! doUnmount()
+      mounted = { doUnmount(); false }
     }
     if (acquired) {
-      acquired = ! doRelease()
+      acquired = { doRelease(); false }
     }
   }
 
@@ -223,15 +225,15 @@ println (Invocation.readerType)
 println (Invocation.mountAt)
 println (Invocation.volumes)
 
-val reader = VolumeReader(Invocation.readerType, Invocation.mountAt)
-val volumes : List[Volume] = Invocation.volumes map (Volume(_, reader)) 
+val reader = VolumeReader(Invocation.readerType)
+val volumes : List[Volume] = Invocation.volumes map (Volume(_, Invocation.mountAt)) 
 
 object VolumeReader {
-    def apply(howToRead: String, mountAt: String): VolumeReader = { 
+    def apply(howToRead: String): VolumeReader = { 
       howToRead match {
-        case "rsync" => new RsyncReader(mountAt)
+        case "rsync" => new RsyncReader
         case "dd" => new BinaryReader
-        case "tar" => new TarballReader(mountAt)
+        case "tar" => new TarballReader
         case _ => throw new IllegalArgumentException(howToRead+" is not a supported reader type.")
       }
     }
@@ -240,7 +242,7 @@ object VolumeReader {
      * RsyncReader requires an xinetd configuration to function.
      * The configuration should be the same as regular rsync, but with
      */
-    class RsyncReader(mountAt: String) extends VolumeReader(mountAt, true) {
+    class RsyncReader extends VolumeReader {
       def read(vol: Volume) = ()
     }
     /**
@@ -249,18 +251,18 @@ object VolumeReader {
      * 1. only one volume is selected for backup
      * 2. volume not mounted (or mounted r/o)
      */
-    class BinaryReader extends VolumeReader(null, false) {
+    class BinaryReader extends VolumeReader {
       def read(vol: Volume) = Sys.dd(vol.getDevForReading)
     }
-    class TarballReader(mountAt: String) extends VolumeReader(mountAt, true) {
-      def read(vol: Volume) = Sys.tar(mountAt)
+    class TarballReader extends VolumeReader {
+      def read(vol: Volume) = Sys.tar(vol.getMountLocation)
     }
 }
 /**
  * if reader reads FSH, only root specified
  * if reader reads block devs, max_size(volumes) == 1
  */ 
-abstract class VolumeReader(val mountAt: String, val needsMounting: Boolean) { 
+abstract class VolumeReader { 
   def read(vol: Volume) : Unit // execs some system process on volume
 }
 

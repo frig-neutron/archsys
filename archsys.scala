@@ -143,11 +143,14 @@ object Volume {
   class LvmVolume(dev: String, path: String, reader: VolumeReader) extends Volume(dev, path, reader) {
     val (vg, liveLv) = Sys.getLvInfo(dev)
     val snapLv = liveLv+"-snap"
+    val snapDev = "/dev/"+vg+"/"+snapLv
 
     protected def doAcquire() = Sys.createLvSnap(vg, liveLv, snapLv)
     protected def doRelease() = Sys.destroyLv(vg, snapLv)
-    protected def doMount() = Sys.mount("/dev/"+vg+"/"+snapLv, reader.mountAt+path)
+    protected def doMount() = Sys.mount(snapDev, reader.mountAt+path)
     protected def doUnmount() = Sys.unmount(reader.mountAt+path)
+
+    override def getDevForReading = if (Sys.isLvmManaged(snapDev)) snapDev else super.getDevForReading
 
     override def toString = super.toString+":vg="+vg+":lv="+liveLv
   }
@@ -164,11 +167,13 @@ object Volume {
  * Basic archival volume abstraction.  
  * Can be acquired and released.
  */
-abstract class Volume(val dev: String, val path: String, val reader: VolumeReader) {
+abstract class Volume(dev: String, path: String, reader: VolumeReader) {
   protected def doAcquire() : Unit
   protected def doRelease() : Unit
   protected def doMount() : Unit
   protected def doUnmount() : Unit
+
+  def getDevForReading = dev
 
   def acquire() {
     doAcquire()
@@ -240,7 +245,7 @@ object VolumeReader {
      * 2. volume not mounted (or mounted r/o)
      */
     class BinaryReader extends VolumeReader(null, false) {
-      def read(vol: Volume) = Sys.dd(vol.dev)
+      def read(vol: Volume) = Sys.dd(vol.getDevForReading)
     }
     class TarballReader(mountAt: String) extends VolumeReader(mountAt, true) {
       def read(vol: Volume) = Sys.tar(mountAt)

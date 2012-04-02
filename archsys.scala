@@ -61,7 +61,7 @@ object Sys {
     def getErrLines : List[String] = linesOf(errB)
   }
 
-  class NonZeroExitCodeException extends Exception
+  class NonZeroExitCodeException(cmd: String, exitCode: Int) extends Exception(cmd+" failed with exit code "+exitCode)
 
   def mounts = "mount" !!
 
@@ -84,9 +84,10 @@ object Sys {
 
   // _DO_ exception if retcode != 0
   def createLvSnap(vg: String, srcLv: String, dstLv: String) {
-    val log = new StringProcessLogger
     val lvcreate = "lvcreate -L 2G --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv
-    execute(List(Process(lvcreate)), log)
+    val status = execute(List(Process(lvcreate)), DevNull)
+    if (status != 0)
+      throw new NonZeroExitCodeException(lvcreate, status)
   }
 
   /*
@@ -95,67 +96,65 @@ object Sys {
    *  For example, we run the following command "tar -c <path> | xz". Killing "xz" process causes an IOException due to broken pipe which is caught and swallowed
    *  by scala and leave our script hanging.
    */
-  private def execute(pbs: List[ProcessBuilder], logger: ProcessLogger, howToBuild: (ProcessBuilder, ProcessBuilder) => ProcessBuilder  = (_ ### _)) {
-    var process: Process = null
-    try {
-      val pb = pbs.tail./:(pbs.head)(howToBuild)
-      process = if (logger == null)
-        pb run
-      else
-        pb run logger
-
-      if (process.exitValue != 0)
-        throw new NonZeroExitCodeException
-    }
-    finally {
-      if (process != null) process.destroy
-    }
+  private def execute(pbs: List[ProcessBuilder], logger: ProcessLogger, howToBuild: (ProcessBuilder, ProcessBuilder) => ProcessBuilder  = (_ ### _)) = {
+    val pb = pbs.tail./:(pbs.head)(howToBuild)
+    if (logger == null)
+      (pb !)
+    else
+      (pb ! logger)
   }
 
   // _DO_ exception if retcode != 0
   def mount(src: String, path: String) {
-    val log = new StringProcessLogger
-    if (isBlockDevice(src)) {
+    val cmds = if (isBlockDevice(src)) {
       val mount = "mount -o ro "+src+" "+path
-      execute(List(Process(mount)), log)
+      List(mount)
     }
     else {
       val mountBind = "mount --bind "+src+" "+path
       val remount = "mount -o remount,ro "+path
-      val processes = List(mountBind, remount) map (Process(_))
-      execute(processes, log, (_ #&& _))
+      List(mountBind, remount)
     }
+    val pbs = cmds map (Process(_))
+    val status = execute(pbs, DevNull, (_ #&& _))
+    if (status != 0)
+      throw new NonZeroExitCodeException(cmds.mkString(" && "), status)
   }
 
   // _DO_ exception if retcode != 0
   def unmount(path: String) {
-    val log = new StringProcessLogger
     val umount = "umount "+path
-    execute(List(Process(umount)), log)
+    val status = execute(List(Process(umount)), DevNull)
+    if (status != 0)
+      throw new NonZeroExitCodeException(umount, status)
   }
 
   // _DO_ exception if retcode != 0
   def destroyLv(vg: String, lv: String) { 
-    val log = new StringProcessLogger
     val lvremove = "lvremove -f "+vg+"/"+lv
-    execute(List(Process(lvremove)), log)
+    val status = execute(List(Process(lvremove)), DevNull)
+    if (status != 0)
+      throw new NonZeroExitCodeException(lvremove, status)
   }
 
   // _DO_ exception if retcode != 0
   def tar(path: String) {
     val tar = "tar -c "+path
-    compress(Process(tar))
+    compress(tar)
   }
 
-  private def compress(process: ProcessBuilder) {
+  private def compress(cmd: String) {
     val xz = "xz"
-    execute(List(process, Process(xz)), null, (_ #| _))
+    val cmds = List(cmd, xz)
+    val status = execute(cmds map (Process(_)), null, (_ #| _))
+    if (status != 0)
+      throw new NonZeroExitCodeException(cmds.mkString(" | "), status)
   }
 
   // _DO_ exception if retcode != 0
   def dd(dev: String) {
     val dd = "dd if="+dev
-    compress(Process(dd))
+    compress(dd)
   }
 }
 

@@ -89,6 +89,12 @@ object Sys {
     execute(List(Process(lvcreate)), log)
   }
 
+  /*
+   *  It is dangerous to pipe from one Process to another with scala due to the inability to catch IOException caused by broken pipe.
+   *  From scala source, ProcessImpl.PipeThread.runloop() will catch all IOException and just prints the stack trace.
+   *  For example, we run the following command "tar -c <path> | xz". Killing "xz" process causes an IOException due to broken pipe which is caught and swallowed
+   *  by scala and leave our script hanging.
+   */
   private def execute(pbs: List[ProcessBuilder], logger: ProcessLogger, howToBuild: (ProcessBuilder, ProcessBuilder) => ProcessBuilder  = (_ ### _)) {
     var process: Process = null
     try {
@@ -101,8 +107,8 @@ object Sys {
       if (process.exitValue != 0)
         throw new NonZeroExitCodeException
     }
-    catch {
-      case e: IOException => { process.destroy; throw e }
+    finally {
+      if (process != null) process.destroy
     }
   }
 

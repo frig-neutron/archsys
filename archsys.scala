@@ -21,7 +21,7 @@ implicit def arrayToList[A](arr: Array[A]) = arr.toList
  */
 object Sys {
   import scala.sys.process._
-  import java.io.{File, Closeable}
+  import java.io.{File, Closeable, IOException}
   import java.net._
 
   implicit def stringToFile(path: String) : File = new File(path)
@@ -61,6 +61,8 @@ object Sys {
     def getErrLines : List[String] = linesOf(errB)
   }
 
+  class NonZeroExitCodeException extends Exception
+
   def mounts = "mount" !!
 
   def isBlockDevice(dev: String) = {
@@ -80,45 +82,74 @@ object Sys {
     (bits(1), bits(0))
   }
 
+  // _DO_ exception if retcode != 0
   def createLvSnap(vg: String, srcLv: String, dstLv: String) {
-    // _DO_ exception if retcode != 0
-    execute("lvcreate -L 2G --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv)
+    val log = new StringProcessLogger
+    val lvcreate = "lvcreate -L 2G --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv
+    execute(List(Process(lvcreate)), log)
   }
 
-  private def execute(cmd: String) {
-    val status = Process(cmd).!
-    if (status != 0) throw new IllegalStateException(cmd+" failed with exit code "+status)
+  private def execute(pbs: List[ProcessBuilder], logger: ProcessLogger, howToBuild: (ProcessBuilder, ProcessBuilder) => ProcessBuilder  = (_ ### _)) {
+    var process: Process = null
+    try {
+      val pb = pbs.tail./:(pbs.head)(howToBuild)
+      process = if (logger == null)
+        pb run
+      else
+        pb run logger
+
+      if (process.exitValue != 0)
+        throw new NonZeroExitCodeException
+    }
+    catch {
+      case e: IOException => { process.destroy; throw e }
+    }
   }
 
   // _DO_ exception if retcode != 0
   def mount(src: String, path: String) {
+    val log = new StringProcessLogger
     if (isBlockDevice(src)) {
-      execute("mount -o ro "+src+" "+path)
+      val mount = "mount -o ro "+src+" "+path
+      execute(List(Process(mount)), log)
     }
     else {
-      execute("mount --bind "+src+" "+path)
-      execute("mount -o remount,ro "+path)
+      val mountBind = "mount --bind "+src+" "+path
+      val remount = "mount -o remount,ro "+path
+      val processes = List(mountBind, remount) map (Process(_))
+      execute(processes, log, (_ #&& _))
     }
   }
 
   // _DO_ exception if retcode != 0
   def unmount(path: String) {
-    execute("umount "+path)
+    val log = new StringProcessLogger
+    val umount = "umount "+path
+    execute(List(Process(umount)), log)
   }
 
+  // _DO_ exception if retcode != 0
   def destroyLv(vg: String, lv: String) { 
-    // _DO_ exception if retcode != 0
-    execute("lvremove -f "+vg+"/"+lv)
+    val log = new StringProcessLogger
+    val lvremove = "lvremove -f "+vg+"/"+lv
+    execute(List(Process(lvremove)), log)
   }
 
   // _DO_ exception if retcode != 0
   def tar(path: String) {
-    execute("tar -c "+path+" | xz")
+    val tar = "tar -c "+path
+    compress(Process(tar))
+  }
+
+  private def compress(process: ProcessBuilder) {
+    val xz = "xz"
+    execute(List(process, Process(xz)), null, (_ #| _))
   }
 
   // _DO_ exception if retcode != 0
   def dd(dev: String) {
-    execute("dd if="+dev+" | xz")
+    val dd = "dd if="+dev
+    compress(Process(dd))
   }
 }
 

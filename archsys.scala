@@ -196,7 +196,7 @@ object Volume {
       throw new IllegalArgumentException("not a real block device: "+dev)
   }
 
-  class LvmVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
+  private class LvmVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
     val (vg, liveLv) = Sys.getLvInfo(dev)
     val snapLv = liveLv+"-snap"
     val snapDev = "/dev/"+vg+"/"+snapLv
@@ -211,7 +211,7 @@ object Volume {
     override def toString = super.toString+":vg="+vg+":lv="+liveLv
   }
 
-  class RawVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
+  private class RawVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
     protected def doAcquire() = ()
     protected def doRelease() = ()
     protected def doMount() = Sys.mount(path, mountAt+path)
@@ -268,7 +268,7 @@ object VolumeReader {
      * RsyncReader requires an xinetd configuration to function.
      * The configuration should be the same as regular rsync, but with
      */
-    class RsyncReader(volumes: List[Volume]) extends VolumeReader(volumes) {
+    private class RsyncReader(volumes: List[Volume]) extends VolumeReader(volumes) {
       import java.nio.channels._
       import java.nio._
       import java.net._
@@ -340,10 +340,10 @@ object VolumeReader {
      * 1. only one volume is selected for backup
      * 2. volume not mounted (or mounted r/o)
      */
-    class BinaryReader(volumes: List[Volume]) extends VolumeReader(volumes) {
+    private class BinaryReader(volumes: List[Volume]) extends VolumeReader(volumes) {
       protected def doRead() = Sys.dd(volumes.head.getDevForReading)
     }
-    class TarballReader(volumes: List[Volume]) extends VolumeReader(volumes) {
+    private class TarballReader(volumes: List[Volume]) extends VolumeReader(volumes) {
       protected def doRead() = Sys.tar(volumes.head.getMountLocation)
     }
 }
@@ -351,7 +351,7 @@ object VolumeReader {
  * if reader reads FSH, only root specified
  * if reader reads block devs, max_size(volumes) == 1
  */ 
-abstract class VolumeReader(val volumes: List[Volume]) { 
+abstract class VolumeReader(volumes: List[Volume]) { 
   protected def doRead() : Unit
 
   def read() = readVolumes(volumes)

@@ -254,32 +254,6 @@ abstract class Volume(dev: String, path: String, mountAt: String) {
   override def toString = getClass+":"+dev+"@"+path
 }
 
-case class Invocation(args: Array[String]) { 
-  private def getParam(name: String) = {
-    val prefix = "--"+name+"="
-    val params = args filter (_ startsWith prefix)
-    if (params.isEmpty || params.size > 1)
-      throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")   
-    else
-      params(0).replace(prefix, "")
-  }
-  private def getReaderTypeAndMountLocation(howToRead: Seq[Char]): Tuple2[String, String] = {
-    howToRead match {
-      case Seq('r','s','y','n','c',':',mountAt @ _*) if (! mountAt.isEmpty) => ("rsync", mountAt.mkString)
-      case Seq('t','a','r',':',mountAt @ _*) if (! mountAt.isEmpty) => ("tar", mountAt.mkString)
-      case Seq('d','d') => ("dd", null)
-      case _ => throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")
-    }
-  }
-  lazy val (readerType, mountAt) = getReaderTypeAndMountLocation(getParam("howToRead"))
-  lazy val volumes = getParam("volumes") split ":" toList
-}
-// --howToRead=... --volumes=/:/usr:/var
-object Invocation extends Invocation(args)
-
-val volumes : List[Volume] = Invocation.volumes map (Volume(_, Invocation.mountAt)) 
-val reader = VolumeReader(Invocation.readerType, volumes)
-
 object VolumeReader {
     def apply(howToRead: String, volumes: List[Volume]): VolumeReader = { 
       howToRead match {
@@ -324,7 +298,7 @@ object VolumeReader {
         }
       }
 
-      def read() = 
+      protected def doRead() =
         using(System.inheritedChannel.asInstanceOf[SocketChannel]) {
           clientToLocal => {
             using(Sys.ServerProcess) {
@@ -367,10 +341,10 @@ object VolumeReader {
      * 2. volume not mounted (or mounted r/o)
      */
     class BinaryReader(volumes: List[Volume]) extends VolumeReader(volumes) {
-      def read() = Sys.dd(volumes.head.getDevForReading)
+      protected def doRead() = Sys.dd(volumes.head.getDevForReading)
     }
     class TarballReader(volumes: List[Volume]) extends VolumeReader(volumes) {
-      def read() = Sys.tar(volumes.head.getMountLocation)
+      protected def doRead() = Sys.tar(volumes.head.getMountLocation)
     }
 }
 /**
@@ -378,8 +352,49 @@ object VolumeReader {
  * if reader reads block devs, max_size(volumes) == 1
  */ 
 abstract class VolumeReader(val volumes: List[Volume]) { 
-  def read() : Unit // execs some system process on volume
+  protected def doRead() : Unit
+
+  def read() = readVolumes(volumes)
+  
+  private def readVolumes(volumes: List[Volume]) {
+    if (volumes.isEmpty)
+      doRead()
+    else { 
+      using(volumes.head) { vol => {
+          vol.acquire
+          readVolumes(volumes.tail)
+        }
+      }
+    }
+  }
 }
+
+case class Invocation(args: Array[String]) { 
+  private def getParam(name: String) = {
+    val prefix = "--"+name+"="
+    val params = args filter (_ startsWith prefix)
+    if (params.isEmpty || params.size > 1)
+      throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")   
+    else
+      params(0).replace(prefix, "")
+  }
+  private def getReaderTypeAndMountLocation(howToRead: Seq[Char]): Tuple2[String, String] = {
+    howToRead match {
+      case Seq('r','s','y','n','c',':',mountAt @ _*) if (! mountAt.isEmpty) => ("rsync", mountAt.mkString)
+      case Seq('t','a','r',':',mountAt @ _*) if (! mountAt.isEmpty) => ("tar", mountAt.mkString)
+      case Seq('d','d') => ("dd", null)
+      case _ => throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")
+    }
+  }
+  lazy val (readerType, mountAt) = getReaderTypeAndMountLocation(getParam("howToRead"))
+  lazy val volumes = getParam("volumes") split ":" toList
+}
+// --howToRead=... --volumes=/:/usr:/var
+object Invocation extends Invocation(args)
+
+val volumes : List[Volume] = Invocation.volumes map (Volume(_, Invocation.mountAt)) 
+val reader = VolumeReader(Invocation.readerType, volumes)
+reader.read
 
 /**
  * Loan pattern with duck typing for Closeable. Copied directly from 
@@ -392,20 +407,5 @@ def using[Closeable <: {def close(): Unit}, B](closeable: Closeable)(getB: Close
     closeable.close()
   }
 
-val first = volumes head
-
-def readVolumes(volumes: List[Volume]) {
-  if (volumes.isEmpty)
-    reader.read
-  else { 
-    using(volumes.head) { vol => {
-        vol.acquire
-        readVolumes(volumes.tail)
-      }
-    }
-  }
-}
-
-readVolumes(reader.volumes)
 
 

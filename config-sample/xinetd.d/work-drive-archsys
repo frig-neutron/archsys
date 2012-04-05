@@ -5,7 +5,8 @@ service work-backup
   wait = no
   user = root
   socket_type = stream
-  server = /home/frig_neutron/src/archsys/rsync.scala
+  server = /usr/local/sbin/archsys 
+  server_args = --volumes=/mnt/WORK/main --howToRead=rsync:/mnt/work-snap
   port = 666
   nice = 10
   log_type = SYSLOG daemon

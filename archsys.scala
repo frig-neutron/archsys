@@ -41,7 +41,7 @@ object Sys {
     override def run {
       proc = 
         "rsync -v --port="+commPort+
-        " -4 --daemon --no-detach --log-file=/tmp/rsync.log"+
+        " -4 --daemon --no-detach --config=/etc/rsync-archsys.conf --log-file=/tmp/rsync.log"+
         " --log-file-format='%t: %f %n/%l xferred'" run DevNull
     }
     def close = proc.destroy
@@ -317,7 +317,7 @@ object VolumeReader {
                     lazy val connected = {
                       def connect(socketAddress: InetSocketAddress, retry: Int): Boolean = {
                         try {
-                          Thread.sleep(500)
+                          Thread.sleep(500) // TODO: investigate removal of sleep
                           localToServer.connect(socketAddress)
                         } catch {
                           case e: IOException => if (retry <= 0) false else connect(socketAddress, retry-1)

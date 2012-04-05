@@ -1,5 +1,5 @@
 #!/bin/bash
-  exec scala "$0" "$@" || logger -t archsys.scala -p user.err "non-zero exit"
+  exec scala "$0" "$@"
 !#
 /**
  * Script to facilitate the archival of a complete or 
@@ -293,28 +293,29 @@ object VolumeReader {
 
       object SocketJoin {
 
-        val bufSize = 8192
-        val buf = new Array[Byte](bufSize)
-
-        private def sockCat(src: InputStream, dst: OutputStream) {
-          import scala.math._
-
-          val readMax = min(bufSize, src.available)
-          val bytesRead = src.read(buf)
-          dst.write(buf, 0, bytesRead)
+        val buf = ByteBuffer.allocate(16 * 1024 * 1024) // 16 meg buffer 
+        private def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) {
+          val bytesRead = src read buf
+          if (bytesRead == -1) 
+            throw new ClosedChannelException
+          buf.flip
+          dst write buf
+          buf.clear
           Sys.Logger.debug("transferred "+bytesRead+" from "+src+" to "+dst)
         }
 
         def proxy(sock: (SocketChannel, SocketChannel)) = {
-          val serverInputStream = sock._1.socket.getInputStream
-          val serverOutputStream = sock._1.socket.getOutputStream
-
-          val clientInputStream = sock._2.socket.getInputStream
-          val clientOutputStream = sock._2.socket.getOutputStream
-
           while (sock._1.isConnected && sock._2.isConnected) { 
-            sockCat(clientInputStream, serverOutputStream)
-            sockCat(serverInputStream, clientOutputStream)
+
+            sock._1.configureBlocking (false)
+            sock._2.configureBlocking (true)
+
+            sockCat(sock._1, sock._2)
+
+            sock._1.configureBlocking (true)
+            sock._2.configureBlocking (false)
+
+            sockCat(sock._2, sock._1)
           }
         }
       }

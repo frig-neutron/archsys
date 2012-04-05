@@ -40,7 +40,7 @@ object Sys {
     var proc : Process = null
     override def run {
       proc = 
-        "rsync -v --port="+commPort+
+        "rsync --port="+commPort+
         " -4 --daemon --no-detach --log-file=/tmp/rsync.log"+
         " --log-file-format='%t: %f %n/%l xferred'" run DevNull
     }
@@ -293,14 +293,14 @@ object VolumeReader {
 
       object SocketJoin {
 
-        val buf = ByteBuffer.allocate(16 * 1024 * 1024) // 16 meg buffer 
+        val buf = ByteBuffer.allocateDirect(16 * 4 * 1024) // 64 KB buffer 
         private def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) {
           val bytesRead = src read buf
           if (bytesRead == -1) 
             throw new ClosedChannelException
           buf.flip
           dst write buf
-          buf.clear
+          buf.compact
           Sys.Logger.debug("transferred "+bytesRead+" from "+src+" to "+dst)
         }
 
@@ -438,6 +438,7 @@ def using[Closeable <: {def close(): Unit}, B](closeable: Closeable)(getB: Close
   try {
     getB(closeable)
   } finally {
+    Thread.sleep(500)
     closeable.close()
   }
 

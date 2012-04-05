@@ -72,3 +72,8 @@ Rsync protocol corruption problem:
     2. async receive / sync flush.
       be more intelligent w/ receive (i.e.: accumulators + timeouts)
 
+  The outcome of the plan:
+    1. stdout corruption doesn't look like the problem.  Only exceptions end 
+      up there.
+    2. playing with buffer sizes and allocation methods (allocate/allocateDirect)
+      yields nothing useful.  more to come.

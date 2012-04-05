@@ -1,5 +1,5 @@
 #!/bin/bash
-  exec scala "$0" "$@"
+  exec scala "$0" "$@" || logger -t archsys.scala -p user.err "non-zero exit"
 !#
 /**
  * Script to facilitate the archival of a complete or 
@@ -41,7 +41,7 @@ object Sys {
     override def run {
       proc = 
         "rsync -v --port="+commPort+
-        " -4 --daemon --no-detach --config=/etc/rsync-archsys.conf --log-file=/tmp/rsync.log"+
+        " -4 --daemon --no-detach --log-file=/tmp/rsync.log"+
         " --log-file-format='%t: %f %n/%l xferred'" run DevNull
     }
     def close = proc.destroy
@@ -59,6 +59,17 @@ object Sys {
     private def linesOf(str: String) = str.trim split "\n" map (_.trim)
     def getOutLines : List[String] = linesOf(outB)
     def getErrLines : List[String] = linesOf(errB)
+  }
+
+  object Logger {
+    val cmd = "logger"
+    val tag = "archsys.scala"
+
+    val info = log("user.info")_
+    val err = log("user.err")_
+    val debug = if (Invocation.debug) log("debug")_ else (s: String) => ()
+
+    private def log(p: String)(s: String): Unit = Process(cmd+" -t "+tag+" -p "+p+" \""+s+"\"").!
   }
 
   class NonZeroExitCodeException(cmd: String, exitCode: Int) extends Exception(cmd+" failed with exit code "+exitCode)
@@ -88,6 +99,7 @@ object Sys {
     val status = execute(List(Process(lvcreate)), DevNull)
     if (status != 0)
       throw new NonZeroExitCodeException(lvcreate, status)
+    Sys.Logger.info("lvcreate "+vg+"/"+dstLv+" success")
   }
 
   /*
@@ -119,6 +131,7 @@ object Sys {
     val status = execute(pbs, DevNull, (_ #&& _))
     if (status != 0)
       throw new NonZeroExitCodeException(cmds.mkString(" && "), status)
+    Sys.Logger.info("mounting "+src+" to "+path+" success")
   }
 
   // _DO_ exception if retcode != 0
@@ -127,6 +140,7 @@ object Sys {
     val status = execute(List(Process(umount)), DevNull)
     if (status != 0)
       throw new NonZeroExitCodeException(umount, status)
+    Sys.Logger.info("unmounting "+path+" success")
   }
 
   // _DO_ exception if retcode != 0
@@ -135,12 +149,14 @@ object Sys {
     val status = execute(List(Process(lvremove)), DevNull)
     if (status != 0)
       throw new NonZeroExitCodeException(lvremove, status)
+    Sys.Logger.info("lvremove "+vg+"/"+lv+" success")
   }
 
   // _DO_ exception if retcode != 0
   def tar(path: String) {
     val tar = "tar -c "+path
     compress(tar)
+    Sys.Logger.info("tar "+path+" success")
   }
 
   private def compress(cmd: String) {
@@ -155,6 +171,7 @@ object Sys {
   def dd(dev: String) {
     val dd = "dd if="+dev
     compress(dd)
+    Sys.Logger.info("dd "+dev+" success")
   }
 }
 
@@ -276,24 +293,28 @@ object VolumeReader {
 
       object SocketJoin {
 
-        val buf = ByteBuffer.allocate(16 * 1024 * 1024) // 16 meg buffer 
-        private def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) {
-          val bytesRead = src read buf
-          if (bytesRead == -1) 
-            throw new ClosedChannelException
-          buf.flip
-          var bytesWritten = 0
-          while (bytesWritten < bytesRead)
-            bytesWritten += dst write buf
-          buf.clear
+        val bufSize = 8192
+        val buf = new Array[Byte](bufSize)
+
+        private def sockCat(src: InputStream, dst: OutputStream) {
+          import scala.math._
+
+          val readMax = min(bufSize, src.available)
+          val bytesRead = src.read(buf)
+          dst.write(buf, 0, bytesRead)
+          Sys.Logger.debug("transferred "+bytesRead+" from "+src+" to "+dst)
         }
 
         def proxy(sock: (SocketChannel, SocketChannel)) = {
-          sock._1.configureBlocking (false)
-          sock._2.configureBlocking (false)
-          while (true) { 
-            sockCat(sock._1, sock._2)
-            sockCat(sock._2, sock._1)
+          val serverInputStream = sock._1.socket.getInputStream
+          val serverOutputStream = sock._1.socket.getOutputStream
+
+          val clientInputStream = sock._2.socket.getInputStream
+          val clientOutputStream = sock._2.socket.getOutputStream
+
+          while (sock._1.isConnected && sock._2.isConnected) { 
+            sockCat(clientInputStream, serverOutputStream)
+            sockCat(serverInputStream, clientOutputStream)
           }
         }
       }
@@ -370,24 +391,36 @@ abstract class VolumeReader(volumes: List[Volume]) {
 }
 
 case class Invocation(args: Array[String]) { 
-  private def getParam(name: String) = {
+  private def getOptParam(name: String) : Option[String] = {
     val prefix = "--"+name+"="
-    val params = args filter (_ startsWith prefix)
-    if (params.isEmpty || params.size > 1)
-      throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")   
-    else
-      params(0).replace(prefix, "")
+    args filter (_ startsWith prefix) match {
+      case Array() => None
+      case Array(x) => Some(x replace (prefix, ""))
+      case _ => badUsage
+    }
   }
+  private def getParam(name: String) = {
+    val params = getOptParam(name)
+    params match {
+      case None => badUsage
+      case Some(x) => x
+    }
+  }
+  private def badUsage = throw new IllegalArgumentException("usage: archsys.scala --volumes=/vol1:/vol1/sub2:... --howToRead=dd|rsync:/mnt/at|tar:/mnt/at [--debug=y]")   
   private def getReaderTypeAndMountLocation(howToRead: Seq[Char]): Tuple2[String, String] = {
     howToRead match {
       case Seq('r','s','y','n','c',':',mountAt @ _*) if (! mountAt.isEmpty) => ("rsync", mountAt.mkString)
       case Seq('t','a','r',':',mountAt @ _*) if (! mountAt.isEmpty) => ("tar", mountAt.mkString)
       case Seq('d','d') => ("dd", null)
-      case _ => throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")
+      case _ => badUsage
     }
   }
   lazy val (readerType, mountAt) = getReaderTypeAndMountLocation(getParam("howToRead"))
   lazy val volumes = getParam("volumes") split ":" toList
+  lazy val debug = getOptParam("debug") match {
+    case None => false 
+    case Some(x) => x startsWith "y"
+  }
 }
 // --howToRead=... --volumes=/:/usr:/var
 object Invocation extends Invocation(args)

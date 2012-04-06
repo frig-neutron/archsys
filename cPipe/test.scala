@@ -41,7 +41,10 @@ trait POSIX extends Library {
   def sync ()
 
   //Array of pointers MUST be terminated by a NULL pointer
-  def execv(file: String, arg: Array[String])
+  def execv(file: String, arg: Array[String]) : Int
+  def fork() : Int
+  def exit(status: Int)
+  def _exit(status: Int)
 }
 
 object exampleOfPOSIX {
@@ -53,9 +56,32 @@ object exampleOfPOSIX {
     //posix.rename("/tmp/newdir","/tmp/renamedir")
     
     var nullTerminator:String = null
-    val params = Array("l", "-l", "666" , nullTerminator)
-    val cmd = "/bin/nc"
-    posix.execv(cmd, params)
+    val pid = posix.fork()
+
+    println(pid)  
+
+    if (pid < 0)
+    {
+      //We are in the parent process
+      //Fork Failed
+      System.out.println("fork failed");
+      posix.exit(99)
+    }
+
+    if (pid == 0)
+    {
+      //We are in the child process
+      val params = Array("l", "-l", "666" , nullTerminator)
+      val cmd = "/bin/nc"
+      posix.execv(cmd, params)
+      posix._exit(0)
+    }
+    else 
+    {
+      //We are in the parent process
+      posix.exit(0)
+    }
+    System.out.println("fork exec done");   
   }
 }
 

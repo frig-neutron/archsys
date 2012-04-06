@@ -14,6 +14,8 @@
  * raw block devices (sometimes necessary).
  */
 
+import scala.annotation.tailrec
+
 implicit def arrayToList[A](arr: Array[A]) = arr.toList
 
 /**
@@ -40,7 +42,7 @@ object Sys {
     var proc : Process = null
     override def run {
       proc = 
-        "rsync --port="+commPort+
+        "rsync --port="+commPort+" --config=/etc/rsyncd-archsys.conf"+
         " -4 --daemon --no-detach --log-file=/tmp/rsync.log"+
         " --log-file-format='%t: %f %n/%l xferred'" run DevNull
     }
@@ -294,28 +296,53 @@ object VolumeReader {
       object SocketJoin {
 
         val buf = ByteBuffer.allocateDirect(16 * 4 * 1024) // 64 KB buffer 
-        private def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) {
+        private def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) = {
+          buf.clear
           val bytesRead = src read buf
           if (bytesRead == -1) 
             throw new ClosedChannelException
           buf.flip
-          dst write buf
-          buf.compact
+          val bytesWritten = dst write buf
           Sys.Logger.debug("transferred "+bytesRead+" from "+src+" to "+dst)
+
+          if (bytesRead != bytesWritten) throw new IOException(
+            "read "+bytesRead+" bytes but wrote "+bytesWritten+" bytes. "+
+            "Read and Write byte counts should be equal")
+
+          if (buf.hasRemaining) throw new RuntimeException(
+            "something mighty wrong with the buffer: "+
+            "bytesRead="+bytesRead+", "+
+            "bytesWritten="+bytesWritten+", "+
+            "but the buffer has "+buf.remaining+" bytes remaining")
+
+          bytesRead
         }
 
-        def proxy(sock: (SocketChannel, SocketChannel)) = {
-          while (sock._1.isConnected && sock._2.isConnected) { 
+        private def copyUntilDry(src: SocketChannel, dst: SocketChannel) { 
+            src configureBlocking false
+            dst configureBlocking true
 
-            sock._1.configureBlocking (false)
-            sock._2.configureBlocking (true)
+            val triesToRead = 5
 
-            sockCat(sock._1, sock._2)
+            def nTries(remaining: Int) {
+              def lessOneIfDry = 
+                if (sockCat(src, dst) > 0) 
+                  triesToRead
+                else 
+                  remaining - 1
 
-            sock._1.configureBlocking (true)
-            sock._2.configureBlocking (false)
+              if (remaining < 1)
+                ()
+              else 
+                nTries (lessOneIfDry)
+            }
+            nTries(triesToRead)
+        }
 
-            sockCat(sock._2, sock._1)
+        @tailrec def proxy(sock: (SocketChannel, SocketChannel)) {
+          if (sock._1.isConnected && sock._2.isConnected) { 
+            copyUntilDry(sock._1, sock._2)
+            proxy (sock.swap)
           }
         }
       }

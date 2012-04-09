@@ -304,18 +304,20 @@ object VolumeReader {
           if (bytesRead == -1) 
             throw new ClosedChannelException
           buf.flip
-          val bytesWritten = dst write buf
-          Sys.Logger.debug("transferred "+bytesRead+" from "+src+" to "+dst)
+          if (bytesRead > 0) {
+            val bytesWritten = dst write buf
+            Sys.Logger.debug("transferred "+bytesRead+" bytes from "+src+" to "+dst)
 
-          if (bytesRead != bytesWritten) throw new IOException(
-            "read "+bytesRead+" bytes but wrote "+bytesWritten+" bytes. "+
-            "Read and Write byte counts should be equal")
+            if (bytesRead != bytesWritten) throw new IOException(
+              "read "+bytesRead+" bytes but wrote "+bytesWritten+" bytes. "+
+              "Read and Write byte counts should be equal")
 
-          if (buf.hasRemaining) throw new RuntimeException(
-            "something mighty wrong with the buffer: "+
-            "bytesRead="+bytesRead+", "+
-            "bytesWritten="+bytesWritten+", "+
-            "but the buffer has "+buf.remaining+" bytes remaining")
+            if (buf.hasRemaining) throw new RuntimeException(
+              "something mighty wrong with the buffer: "+
+              "bytesRead="+bytesRead+", "+
+              "bytesWritten="+bytesWritten+", "+
+              "but the buffer has "+buf.remaining+" bytes remaining")
+          }
 
           bytesRead
         }

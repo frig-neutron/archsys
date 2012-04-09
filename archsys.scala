@@ -326,21 +326,32 @@ object VolumeReader {
             src configureBlocking false
             dst configureBlocking true
 
-            val triesToRead = 5
+            /**
+             * performs an action repeatedly, until n consecutive failures
+             *
+             * @param n - number of consecutive failures to permit 
+             * @param failP - predicate that determines failure, running the 
+             *      function as a side effect.  In common parlance: "the beef".
+             */
+            def nConsecutiveFailures(n: Int)(failP: => Boolean) {
+              @tailrec def nConsecutiveFailuresImpl(remaining: Int) {
+                def decOnFail = 
+                  if (failP) 
+                    remaining - 1
+                  else 
+                    n
 
-            def nTries(remaining: Int) {
-              def lessOneIfDry = 
-                if (sockCat(src, dst) > 0) 
-                  triesToRead
+                if (remaining < 1) 
+                  ()
                 else 
-                  remaining - 1
-
-              if (remaining < 1)
-                ()
-              else 
-                nTries (lessOneIfDry)
+                  nConsecutiveFailuresImpl ( decOnFail )
+              }
+              nConsecutiveFailuresImpl(n)
             }
-            nTries(triesToRead)
+            
+            nConsecutiveFailures(5) { 
+              sockCat(src, dst) <= 0
+            }
         }
 
         @tailrec def proxy(sock: (SocketChannel, SocketChannel)) {

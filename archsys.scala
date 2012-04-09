@@ -435,11 +435,11 @@ case class Invocation(args: Array[String]) {
     }
   }
   private def badUsage = throw new IllegalArgumentException("usage: archsys.scala --volumes=/vol1:/vol1/sub2:... --howToRead=dd|rsync:/mnt/at|tar:/mnt/at [--debug=y]")   
-  private def getReaderTypeAndMountLocation(howToRead: Seq[Char]): Tuple2[String, String] = {
-    howToRead match {
-      case Seq('r','s','y','n','c',':',mountAt @ _*) if (! mountAt.isEmpty) => ("rsync", mountAt.mkString)
-      case Seq('t','a','r',':',mountAt @ _*) if (! mountAt.isEmpty) => ("tar", mountAt.mkString)
-      case Seq('d','d') => ("dd", null)
+  private def getReaderTypeAndMountLocation(howToRead: String): Tuple2[String, String] = {
+    howToRead split ":" toList match {
+      case List("rsync", mountAt) => ("rsync", mountAt)
+      case List("tar", mountAt) => ("tar", mountAt)
+      case List("dd") => ("dd", null)
       case _ => badUsage
     }
   }
@@ -450,7 +450,7 @@ case class Invocation(args: Array[String]) {
     case Some(x) => x startsWith "y"
   }
 }
-// --howToRead=... --volumes=/:/usr:/var
+
 object Invocation extends Invocation(args)
 
 val volumes : List[Volume] = Invocation.volumes map (Volume(_, Invocation.mountAt)) 

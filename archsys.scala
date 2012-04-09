@@ -41,12 +41,14 @@ object Sys {
     }
     var proc : Process = null
     override def run {
-      proc = 
+      val rsyncCmd = 
         "rsync --port="+commPort+" --config=/etc/rsyncd-archsys.conf"+
         " -4 --daemon --no-detach --log-file=/tmp/rsync.log"+
-        " --log-file-format='%t: %f %n/%l xferred'" run DevNull
+        " --log-file-format='%t: %f %n/%l xferred'" 
+      Sys.Logger.debug(rsyncCmd)
+      proc = rsyncCmd run DevNull
     }
-    def close = proc.destroy
+    def close = try { proc.destroy } finally { () }
   }
 
   class StringProcessLogger extends ProcessLogger {
@@ -64,14 +66,13 @@ object Sys {
   }
 
   object Logger {
-    val cmd = "logger"
     val tag = "archsys.scala"
 
     val info = log("user.info")_
     val err = log("user.err")_
     val debug = if (Invocation.debug) log("debug")_ else (s: String) => ()
 
-    private def log(p: String)(s: String): Unit = Process(cmd+" -t "+tag+" -p "+p+" \""+s+"\"").!
+    private def log(p: String)(s: String): Unit = Process("logger -t "+tag+" -p "+p+" -- "+s).!!
   }
 
   class NonZeroExitCodeException(cmd: String, exitCode: Int) extends Exception(cmd+" failed with exit code "+exitCode)
@@ -172,6 +173,7 @@ object Sys {
   // _DO_ exception if retcode != 0
   def dd(dev: String) {
     val dd = "dd if="+dev
+    Sys.Logger.debug("invoke: "+dd)
     compress(dd)
     Sys.Logger.info("dd "+dev+" success")
   }
@@ -410,6 +412,7 @@ abstract class VolumeReader(volumes: List[Volume]) {
       doRead()
     else { 
       using(volumes.head) { vol => {
+          Sys.Logger.debug("acquiring "+vol)
           vol.acquire
           readVolumes(volumes.tail)
         }
@@ -463,9 +466,11 @@ reader.read
  */
 def using[Closeable <: {def close(): Unit}, B](closeable: Closeable)(getB: Closeable => B) : B = 
   try {
+    Sys.Logger.debug("with "+closeable)
     getB(closeable)
   } finally {
-    Thread.sleep(500)
+    Thread.sleep(500) // TODO: wait for something explicit
+    Sys.Logger.debug("closing "+closeable)
     closeable.close()
   }
 

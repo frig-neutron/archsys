@@ -92,18 +92,19 @@ object Sys {
   def getLvInfo(dev: String) = { 
     val log = new StringProcessLogger
     "lvdisplay -C "+dev ! log // don't exception if retcode != 0
-    val bits = log.getOutLines(1).trim split " +" slice (0,2)
-    (bits(1), bits(0))
+    val bits = log.getOutLines(1).trim split " +" slice (0,4)
+    (bits(1), bits(0), bits(3))
   }
 
   // _DO_ exception if retcode != 0
-  def createLvSnap(vg: String, srcLv: String, dstLv: String) {
-    val lvcreate = "lvcreate -L 2G --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv
+  def createLvSnap(vg: String, srcLv: String, dstLv: String, dstLvSize: String) {
+    val lvcreate = "lvcreate -L " + dstLvSize + " --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv
     val status = execute(List(Process(lvcreate)), DevNull)
     if (status != 0)
       throw new NonZeroExitCodeException(lvcreate, status)
     Sys.Logger.info("lvcreate "+vg+"/"+dstLv+" success")
   }
+
 
   /*
    *  It is dangerous to pipe from one Process to another with scala due to the inability to catch IOException caused by broken pipe.
@@ -218,11 +219,17 @@ object Volume {
   }
 
   private class LvmVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
-    val (vg, liveLv) = Sys.getLvInfo(dev)
+    val (vg, liveLv, liveLvSize) = Sys.getLvInfo(dev)
     val snapLv = liveLv+"-snap"
     val snapDev = "/dev/"+vg+"/"+snapLv
+    val snapLvSize = calculateLvSnapSize(liveLvSize)
 
-    protected def doAcquire() = Sys.createLvSnap(vg, liveLv, snapLv)
+    private def calculateLvSnapSize(originalLvSize: String) = {
+      val portion = 0.1;
+      val sizeAndUnit = originalLvSize split ("\\.\\d+")
+      (((sizeAndUnit(0) toFloat) * portion) toString) + sizeAndUnit(1)
+    }
+    protected def doAcquire() = Sys.createLvSnap(vg, liveLv, snapLv, snapLvSize)
     protected def doRelease() = Sys.destroyLv(vg, snapLv)
     protected def doMount() = Sys.mount(snapDev, mountAt+path)
     protected def doUnmount() = Sys.unmount(mountAt+path)

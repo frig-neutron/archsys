@@ -35,12 +35,12 @@ object Sys {
     def err(s: => String): Unit = ()
   }
 
-  object ServerProcess extends Thread with Closeable {
+  object ServerProcess extends Closeable {
     lazy val commPort = using(new ServerSocket(0)) {
       socket => socket.getLocalPort
     }
     var proc : Process = null
-    override def run {
+    def run {
       val rsyncCmd = 
         "rsync --port="+commPort+" --config=/etc/rsyncd-archsys.conf"+
         " -4 --daemon --no-detach --log-file=/tmp/rsync.log"+
@@ -317,7 +317,9 @@ object VolumeReader {
               "bytesRead="+bytesRead+", "+
               "bytesWritten="+bytesWritten+", "+
               "but the buffer has "+buf.remaining+" bytes remaining")
-          }
+          } else {
+	    Thread.sleep(10)
+	  }
 
           bytesRead
         }

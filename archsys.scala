@@ -72,7 +72,7 @@ object Sys {
     val err = log("user.err")_
     val debug = if (Invocation.debug) log("debug")_ else (s: String) => ()
 
-    private def log(p: String)(s: String): Unit = Process("logger -t "+tag+" -p "+p+" -- "+s).!!
+    private def log(p: String)(s: String): Unit = () //Process("logger -t "+tag+" -p "+p+" -- "+s).!!
   }
 
   class NonZeroExitCodeException(cmd: String, exitCode: Int) extends Exception(cmd+" failed with exit code "+exitCode)

@@ -302,80 +302,39 @@ object VolumeReader {
       import java.net._
       import java.io._
 
-      object SocketJoin {
+      class SocketJoin(src: ReadableByteChannel, dst: WritableByteChannel) extends Thread {
 
+	val pollDelay = 10
         val buf = ByteBuffer.allocateDirect(16 * 4 * 1024) // 64 KB buffer 
-        private def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) = {
-          buf.clear
-          val bytesRead = src read buf
-          if (bytesRead == -1) 
-            throw new ClosedChannelException
-          buf.flip
-          if (bytesRead > 0) {
-            val bytesWritten = dst write buf
-            Sys.Logger.debug("transferred "+bytesRead+" bytes from "+src+" to "+dst)
+        override def run = {
+	  @tailrec def loop {
+	    buf.clear
+	    val bytesRead = src read buf
+	    buf.flip
 
-            if (bytesRead != bytesWritten) throw new IOException(
-              "read "+bytesRead+" bytes but wrote "+bytesWritten+" bytes. "+
-              "Read and Write byte counts should be equal")
+	    while (buf.hasRemaining)
+	      if ((dst write buf) == 0)
+		Thread sleep pollDelay
 
-            if (buf.hasRemaining) throw new RuntimeException(
-              "something mighty wrong with the buffer: "+
-              "bytesRead="+bytesRead+", "+
-              "bytesWritten="+bytesWritten+", "+
-              "but the buffer has "+buf.remaining+" bytes remaining")
-          } else {
-	    Thread.sleep(10)
+	    Sys.Logger.debug("transferring "+bytesRead+ " bytes")
+
+	    if (bytesRead == 0) 
+	      Thread sleep pollDelay 
+
+	    if (bytesRead > -1) 
+	      loop
 	  }
 
-          bytesRead
+	  loop
         }
 
-        private def copyUntilDry(src: SocketChannel, dst: SocketChannel) { 
-            src configureBlocking false
-            dst configureBlocking true
-
-            /**
-             * performs an action repeatedly, until n consecutive failures
-             *
-             * @param n - number of consecutive failures to permit 
-             * @param failP - predicate that determines failure, running the 
-             *      function as a side effect.  In common parlance: "the beef".
-             */
-            def nConsecutiveFailures(n: Int)(failP: => Boolean) {
-              @tailrec def nConsecutiveFailuresImpl(remaining: Int) {
-                def decOnFail = 
-                  if (failP) 
-                    remaining - 1
-                  else 
-                    n
-
-                if (remaining < 1) 
-                  ()
-                else 
-                  nConsecutiveFailuresImpl ( decOnFail )
-              }
-              nConsecutiveFailuresImpl(n)
-            }
-            
-            nConsecutiveFailures(5) { 
-              sockCat(src, dst) <= 0
-            }
-        }
-
-        @tailrec def proxy(sock: (SocketChannel, SocketChannel)) {
-          if (sock._1.isConnected && sock._2.isConnected) { 
-            copyUntilDry(sock._1, sock._2)
-            proxy (sock.swap)
-          }
-        }
       }
 
       protected def doRead() =
         using(System.inheritedChannel.asInstanceOf[SocketChannel]) {
-          clientToLocal => {
+          clientToLocal => 
             using(Sys.ServerProcess) {
-              server => {
+              server =>
                 using(SocketChannel.open) {
                   localToServer => {
                     server.run
@@ -399,12 +358,22 @@ object VolumeReader {
                       connect(new InetSocketAddress("localhost", Sys.ServerProcess.commPort), 5)
                     }
 
-                    if (connected) SocketJoin.proxy(clientToLocal, localToServer)
+                    if (connected) {
+		      localToServer.configureBlocking(false)
+		      clientToLocal.configureBlocking(false)
+		      val loc2server = new SocketJoin(localToServer, clientToLocal)
+		      val loc2client = new SocketJoin(clientToLocal, localToServer)
+		      loc2server.start
+		      loc2client.start
+
+		      while (loc2server.isAlive || loc2client.isAlive) {
+			loc2server.join(1000)
+			loc2client.join(1000)
+		      }
+		    }
                   }
                 }
-              }
             }
-          }
         }
     }
     /**

@@ -158,12 +158,12 @@ object Sys {
 
   // _DO_ exception if retcode != 0
   def tar(path: String) {
-    //excludes file can contain exclude patterns that do not match the system
+    //excludes file can contain exclude patterns that do not match on the system
     val excludeFile="/etc/archsys/tarExcludes"
-    val excludes = if(fileExists(excludeFile)) "--exclude-from="+excludeFile+" " else ""
-    val tar = "tar -c "+excludes+path
+    var excludes = getExcludes(excludeFile, path)
+    val tar = "tar -c"+excludes+" "+path
     compress(tar)
-    Sys.Logger.info("tar "+excludes+path+" success")
+    Sys.Logger.info("tar"+excludes+" "+path+" success")
   }
 
   private def compress(cmd: String) {
@@ -182,10 +182,14 @@ object Sys {
     Sys.Logger.info("dd "+dev+" success")
   }
 
-  private def fileExists(file: File) = {
-    file.exists
+  private def getExcludes(file: String, path: String) = {
+    if (new File(file).exists){
+      val makeExcludes = scala.io.Source.fromFile(file).getLines
+      makeExcludes map ( " --exclude=" + path + _ ) mkString
+    }
+    else
+      ""
   }
-
 }
 
 

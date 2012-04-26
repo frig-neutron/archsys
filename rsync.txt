@@ -47,3 +47,33 @@ Rsync protocol corruption problem:
   Implementing first solution, because it is a bit easier. Alternate
     solution may provide slightly better performance, though this 
     really needs to be tested with the hard stick of measurement.
+
+  Update 2012-04-05: Intial solution to protocol corruption problem did not 
+    work.  Corruption sneaks in a little bit later in the data transfer.  
+    Tried Alt solution.  No go, though it does seem to go a bit faster.
+
+    Tried to use java Sockets with {Input,Output}Stream.  Also no go: 
+      - if we read min(available, bufSize) bytes from intput stream, we keep
+        reading 0 bytes.  This might be happening due to a bum implementation
+        of InputStream.available(), as the javadoc warns it might be.  
+        Incidentally, the Socket/Stream implementation (as evident from 
+        the toString methods) is internal to NIO, so it's probably just a 
+        re-wrapping of the NIO API.
+      - if we read up to bufSize bytes from the input stream, we start out 
+        ok but promptly deadlock.  You can see rsync hanging in the background,
+        doing nothing.
+
+  Observation: archsys.scala crashes are visible to the rsync client, 
+    suggesting that stdout is somehow forwarded to the socket.  This may be the
+    cause of the protocol corruption.
+
+  The plan: 
+    1. control std{in,out} to make sure nothing corrupts our rsync protocol.
+    2. async receive / sync flush.
+      be more intelligent w/ receive (i.e.: accumulators + timeouts)
+
+  The outcome of the plan:
+    1. stdout corruption doesn't look like the problem.  Only exceptions end 
+      up there.
+    2. playing with buffer sizes and allocation methods (allocate/allocateDirect)
+      yields nothing useful.  more to come.

@@ -1,5 +1,5 @@
 #!/bin/bash
-  exec scala "$0" "$@"
+  exec scala -cp "/home/spang/scala_workspace/archsys/lib/*:/home/spang/scala_workspace/archsys/lib" "$0" "$@"
 !#
 /**
  * Script to facilitate the archival of a complete or 
@@ -13,6 +13,8 @@
  * Suppors archival of volumes using LVM (preferred) or
  * raw block devices (sometimes necessary).
  */
+
+import scala.annotation.tailrec
 
 implicit def arrayToList[A](arr: Array[A]) = arr.toList
 
@@ -33,18 +35,20 @@ object Sys {
     def err(s: => String): Unit = ()
   }
 
-  object ServerProcess extends Thread with Closeable {
+  object ServerProcess extends Closeable {
     lazy val commPort = using(new ServerSocket(0)) {
       socket => socket.getLocalPort
     }
     var proc : Process = null
-    override def run {
-      proc = 
-        "rsync -v --port="+commPort+
-        " -4 --daemon --no-detach --config=/etc/rsync-archsys.conf --log-file=/tmp/rsync.log"+
-        " --log-file-format='%t: %f %n/%l xferred'" run DevNull
+    def run {
+      val rsyncCmd = 
+        "rsync --port="+commPort+" --config=/etc/rsyncd-archsys.conf"+
+        " -4 --daemon --no-detach --log-file=/tmp/rsync.log"+
+        " --log-file-format='%t: %f %n/%l xferred'" 
+      Sys.Logger.debug(rsyncCmd)
+      proc = rsyncCmd run DevNull
     }
-    def close = proc.destroy
+    def close = try { proc.destroy } finally { () }
   }
 
   class StringProcessLogger extends ProcessLogger {
@@ -59,6 +63,16 @@ object Sys {
     private def linesOf(str: String) = str.trim split "\n" map (_.trim)
     def getOutLines : List[String] = linesOf(outB)
     def getErrLines : List[String] = linesOf(errB)
+  }
+
+  object Logger {
+    import org.slf4j.{Logger => SL4JLogger,LoggerFactory}
+
+    private val log = LoggerFactory.getLogger(SL4JLogger.ROOT_LOGGER_NAME)
+
+    def info(s: String) = log.info(s)
+    def err(s: String) = log.error(s)
+    def debug(s: String) = if (Invocation.debug) log.debug(s) else (s: String) => ()
   }
 
   class NonZeroExitCodeException(cmd: String, exitCode: Int) extends Exception(cmd+" failed with exit code "+exitCode)
@@ -78,17 +92,19 @@ object Sys {
   def getLvInfo(dev: String) = { 
     val log = new StringProcessLogger
     "lvdisplay -C "+dev ! log // don't exception if retcode != 0
-    val bits = log.getOutLines(1).trim split " +" slice (0,2)
-    (bits(1), bits(0))
+    val bits = log.getOutLines(1).trim split " +" slice (0,4)
+    (bits(1), bits(0), bits(3))
   }
 
   // _DO_ exception if retcode != 0
-  def createLvSnap(vg: String, srcLv: String, dstLv: String) {
-    val lvcreate = "lvcreate -L 2G --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv
+  def createLvSnap(vg: String, srcLv: String, dstLv: String, dstLvSize: String) {
+    val lvcreate = "lvcreate -L " + dstLvSize + " --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv
     val status = execute(List(Process(lvcreate)), DevNull)
     if (status != 0)
       throw new NonZeroExitCodeException(lvcreate, status)
+    Sys.Logger.info("lvcreate "+vg+"/"+dstLv+" success")
   }
+
 
   /*
    *  It is dangerous to pipe from one Process to another with scala due to the inability to catch IOException caused by broken pipe.
@@ -119,6 +135,7 @@ object Sys {
     val status = execute(pbs, DevNull, (_ #&& _))
     if (status != 0)
       throw new NonZeroExitCodeException(cmds.mkString(" && "), status)
+    Sys.Logger.info("mounting "+src+" to "+path+" success")
   }
 
   // _DO_ exception if retcode != 0
@@ -127,6 +144,7 @@ object Sys {
     val status = execute(List(Process(umount)), DevNull)
     if (status != 0)
       throw new NonZeroExitCodeException(umount, status)
+    Sys.Logger.info("unmounting "+path+" success")
   }
 
   // _DO_ exception if retcode != 0
@@ -135,12 +153,14 @@ object Sys {
     val status = execute(List(Process(lvremove)), DevNull)
     if (status != 0)
       throw new NonZeroExitCodeException(lvremove, status)
+    Sys.Logger.info("lvremove "+vg+"/"+lv+" success")
   }
 
   // _DO_ exception if retcode != 0
   def tar(path: String) {
     val tar = "tar -c "+path
     compress(tar)
+    Sys.Logger.info("tar "+path+" success")
   }
 
   private def compress(cmd: String) {
@@ -154,7 +174,9 @@ object Sys {
   // _DO_ exception if retcode != 0
   def dd(dev: String) {
     val dd = "dd if="+dev
+    Sys.Logger.debug("invoke: "+dd)
     compress(dd)
+    Sys.Logger.info("dd "+dev+" success")
   }
 }
 
@@ -197,11 +219,17 @@ object Volume {
   }
 
   private class LvmVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
-    val (vg, liveLv) = Sys.getLvInfo(dev)
+    val (vg, liveLv, liveLvSize) = Sys.getLvInfo(dev)
     val snapLv = liveLv+"-snap"
     val snapDev = "/dev/"+vg+"/"+snapLv
+    val snapLvSize = calculateLvSnapSize(liveLvSize)
 
-    protected def doAcquire() = Sys.createLvSnap(vg, liveLv, snapLv)
+    private def calculateLvSnapSize(originalLvSize: String) = {
+      val portion = 0.1;
+      val sizeAndUnit = originalLvSize split ("\\.\\d+")
+      (((sizeAndUnit(0) toFloat) * portion) toString) + sizeAndUnit(1)
+    }
+    protected def doAcquire() = Sys.createLvSnap(vg, liveLv, snapLv, snapLvSize)
     protected def doRelease() = Sys.destroyLv(vg, snapLv)
     protected def doMount() = Sys.mount(snapDev, mountAt+path)
     protected def doUnmount() = Sys.unmount(mountAt+path)
@@ -274,35 +302,39 @@ object VolumeReader {
       import java.net._
       import java.io._
 
-      object SocketJoin {
+      class SocketJoin(src: ReadableByteChannel, dst: WritableByteChannel) extends Thread {
 
-        val buf = ByteBuffer.allocate(16 * 1024 * 1024) // 16 meg buffer 
-        private def sockCat(src: ReadableByteChannel, dst: WritableByteChannel) {
-          val bytesRead = src read buf
-          if (bytesRead == -1) 
-            throw new ClosedChannelException
-          buf.flip
-          var bytesWritten = 0
-          while (bytesWritten < bytesRead)
-            bytesWritten += dst write buf
-          buf.clear
+	val pollDelay = 10
+        val buf = ByteBuffer.allocateDirect(16 * 4 * 1024) // 64 KB buffer 
+        override def run = {
+	  @tailrec def loop {
+	    buf.clear
+	    val bytesRead = src read buf
+	    buf.flip
+
+	    while (buf.hasRemaining)
+	      if ((dst write buf) == 0)
+		Thread sleep pollDelay
+
+	    Sys.Logger.debug("transferring "+bytesRead+ " bytes")
+
+	    if (bytesRead == 0) 
+	      Thread sleep pollDelay 
+
+	    if (bytesRead > -1) 
+	      loop
+	  }
+
+	  loop
         }
 
-        def proxy(sock: (SocketChannel, SocketChannel)) = {
-          sock._1.configureBlocking (false)
-          sock._2.configureBlocking (false)
-          while (true) { 
-            sockCat(sock._1, sock._2)
-            sockCat(sock._2, sock._1)
-          }
-        }
       }
 
       protected def doRead() =
         using(System.inheritedChannel.asInstanceOf[SocketChannel]) {
-          clientToLocal => {
+          clientToLocal => 
             using(Sys.ServerProcess) {
-              server => {
+              server =>
                 using(SocketChannel.open) {
                   localToServer => {
                     server.run
@@ -326,12 +358,22 @@ object VolumeReader {
                       connect(new InetSocketAddress("localhost", Sys.ServerProcess.commPort), 5)
                     }
 
-                    if (connected) SocketJoin.proxy(clientToLocal, localToServer)
+                    if (connected) {
+		      localToServer.configureBlocking(false)
+		      clientToLocal.configureBlocking(false)
+		      val loc2server = new SocketJoin(localToServer, clientToLocal)
+		      val loc2client = new SocketJoin(clientToLocal, localToServer)
+		      loc2server.start
+		      loc2client.start
+
+		      while (loc2server.isAlive || loc2client.isAlive) {
+			loc2server.join(1000)
+			loc2client.join(1000)
+		      }
+		    }
                   }
                 }
-              }
             }
-          }
         }
     }
     /**
@@ -361,6 +403,7 @@ abstract class VolumeReader(volumes: List[Volume]) {
       doRead()
     else { 
       using(volumes.head) { vol => {
+          Sys.Logger.debug("acquiring "+vol)
           vol.acquire
           readVolumes(volumes.tail)
         }
@@ -370,26 +413,38 @@ abstract class VolumeReader(volumes: List[Volume]) {
 }
 
 case class Invocation(args: Array[String]) { 
-  private def getParam(name: String) = {
+  private def getOptParam(name: String) : Option[String] = {
     val prefix = "--"+name+"="
-    val params = args filter (_ startsWith prefix)
-    if (params.isEmpty || params.size > 1)
-      throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")   
-    else
-      params(0).replace(prefix, "")
+    args filter (_ startsWith prefix) match {
+      case Array() => None
+      case Array(x) => Some(x replace (prefix, ""))
+      case _ => badUsage
+    }
   }
-  private def getReaderTypeAndMountLocation(howToRead: Seq[Char]): Tuple2[String, String] = {
-    howToRead match {
-      case Seq('r','s','y','n','c',':',mountAt @ _*) if (! mountAt.isEmpty) => ("rsync", mountAt.mkString)
-      case Seq('t','a','r',':',mountAt @ _*) if (! mountAt.isEmpty) => ("tar", mountAt.mkString)
-      case Seq('d','d') => ("dd", null)
-      case _ => throw new IllegalArgumentException("TODO: usage: ...blah..blah..blah...")
+  private def getParam(name: String) = {
+    val params = getOptParam(name)
+    params match {
+      case None => badUsage
+      case Some(x) => x
+    }
+  }
+  private def badUsage = throw new IllegalArgumentException("usage: archsys.scala --volumes=/vol1:/vol1/sub2:... --howToRead=dd|rsync:/mnt/at|tar:/mnt/at [--debug=y]")   
+  private def getReaderTypeAndMountLocation(howToRead: String): Tuple2[String, String] = {
+    howToRead split ":" toList match {
+      case List("rsync", mountAt) => ("rsync", mountAt)
+      case List("tar", mountAt) => ("tar", mountAt)
+      case List("dd") => ("dd", null)
+      case _ => badUsage
     }
   }
   lazy val (readerType, mountAt) = getReaderTypeAndMountLocation(getParam("howToRead"))
   lazy val volumes = getParam("volumes") split ":" toList
+  lazy val debug = getOptParam("debug") match {
+    case None => false 
+    case Some(x) => x startsWith "y"
+  }
 }
-// --howToRead=... --volumes=/:/usr:/var
+
 object Invocation extends Invocation(args)
 
 val volumes : List[Volume] = Invocation.volumes map (Volume(_, Invocation.mountAt)) 
@@ -402,8 +457,11 @@ reader.read
  */
 def using[Closeable <: {def close(): Unit}, B](closeable: Closeable)(getB: Closeable => B) : B = 
   try {
+    Sys.Logger.debug("with "+closeable)
     getB(closeable)
   } finally {
+    Thread.sleep(500) // TODO: wait for something explicit
+    Sys.Logger.debug("closing "+closeable)
     closeable.close()
   }
 

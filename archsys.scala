@@ -1,5 +1,5 @@
 #!/bin/bash
-  exec scala "$0" "$@"
+  exec scala -cp "/home/spang/scala_workspace/archsys/lib/*:/home/spang/scala_workspace/archsys/lib" "$0" "$@"
 !#
 /**
  * Script to facilitate the archival of a complete or 
@@ -66,13 +66,13 @@ object Sys {
   }
 
   object Logger {
-    val tag = "archsys.scala"
+    import org.slf4j.{Logger => SL4JLogger,LoggerFactory}
 
-    val info = log("user.info")_
-    val err = log("user.err")_
-    val debug = if (Invocation.debug) log("debug")_ else (s: String) => ()
+    private val log = LoggerFactory.getLogger(SL4JLogger.ROOT_LOGGER_NAME)
 
-    private def log(p: String)(s: String): Unit = () //Process("logger -t "+tag+" -p "+p+" -- "+s).!!
+    def info(s: String) = log.info(s)
+    def err(s: String) = log.error(s)
+    def debug(s: String) = if (Invocation.debug) log.debug(s) else (s: String) => ()
   }
 
   class NonZeroExitCodeException(cmd: String, exitCode: Int) extends Exception(cmd+" failed with exit code "+exitCode)

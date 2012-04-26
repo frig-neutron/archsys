@@ -1,0 +1,15 @@
+service work-backup
+{
+  type = UNLISTED
+  protocol = tcp
+  wait = no
+  user = root
+  socket_type = stream
+  server = /usr/local/sbin/archsys.scala
+  server_args = --volumes=/mnt/WORK/main --howToRead=rsync:/mnt/work-snap
+  port = 666
+  nice = 10
+  log_type = SYSLOG daemon
+  only_from = localhost
+  bind = 127.0.0.1
+}

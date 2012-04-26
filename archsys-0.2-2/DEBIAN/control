@@ -1,0 +1,7 @@
+Package: archsys
+Version: 0.2.2
+Section: base
+Priority: optional
+Architecture: amd64
+Maintainer: Proship IT Team <it@proship.com>
+Description: Custom scala script to backup critical Proship infrastructure

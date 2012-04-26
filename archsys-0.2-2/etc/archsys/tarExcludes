@@ -1,0 +1,7 @@
+/dev/*
+/var/spool/*
+/lost+found/*
+/mnt/*
+/proc/*
+/sys/*
+/var/spool/squid/*

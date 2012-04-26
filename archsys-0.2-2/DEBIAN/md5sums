@@ -1,0 +1,7 @@
+d4943aaef2b809d98b71c27d8be283a8  /usr/local/lib/archsys/logback-core-1.0.2.jar
+a134d83e0c12a9611824284c855ffb13  /usr/local/lib/archsys/slf4j-api-1.6.4.jar
+51925bc934763cbebcb999719eb7621e  /usr/local/lib/archsys/logback-classic-1.0.2.jar
+a4754e10c2a7873fba6bdfd50604a779  /usr/local/sbin/archsys.scala
+df282a0d3221ef92f93a280369d469a9  /mnt/work-snap/mnt/WORK/main/README
+2499ca93adadf0e4989b15c01f4d2f0c  /etc/rsyncd-archsys.conf
+94ba4a6aa0bd30dd18e784f354007301  /etc/xinetd.d/work-drive-archsys

@@ -1,5 +1,5 @@
 #!/bin/bash
-  exec scala -cp "/home/spang/scala_workspace/archsys/lib/*:/home/spang/scala_workspace/archsys/lib" "$0" "$@"
+  exec scala -cp "/usr/local/lib/archsys/*:/etc/archsys" "$0" "$@"
 !#
 /**
  * Script to facilitate the archival of a complete or 
@@ -158,9 +158,12 @@ object Sys {
 
   // _DO_ exception if retcode != 0
   def tar(path: String) {
-    val tar = "tar -c "+path
+    //excludes file can contain exclude patterns that do not match the system
+    val excludeFile="/etc/archsys/tarExcludes"
+    val excludes = if(fileExists(excludeFile)) "--exclude-from="+excludeFile+" " else ""
+    val tar = "tar -c "+excludes+path
     compress(tar)
-    Sys.Logger.info("tar "+path+" success")
+    Sys.Logger.info("tar "+excludes+path+" success")
   }
 
   private def compress(cmd: String) {
@@ -178,6 +181,11 @@ object Sys {
     compress(dd)
     Sys.Logger.info("dd "+dev+" success")
   }
+
+  private def fileExists(file: File) = {
+    file.exists
+  }
+
 }
 
 

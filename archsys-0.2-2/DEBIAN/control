@@ -1,7 +1,8 @@
 Package: archsys
 Version: 0.2.2
-Section: base
+Section: admin
 Priority: optional
+Depends: scala (>= 2.9.0), xz-utils, tar, xinetd, rsync, mount, file, coreutils
 Architecture: all
 Maintainer: Proship IT Team <it@proship.com>
-Description: Custom scala script to backup critical Proship infrastructure
+Description: Server backup script

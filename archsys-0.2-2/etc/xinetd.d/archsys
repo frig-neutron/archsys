@@ -1,0 +1,36 @@
+# 
+# xinetd service configuration for backup script.
+#
+# For those just tuning in, archsys works by taking an LVM snapshot of 
+# the volumes you want to backup (one at a time), then either mounts the
+# snapshot or reads it from the device file depending on options.
+#
+# To configure:
+#   service: name xinetd will call this service
+#   server_args: 
+#      --volumes=/vol1:/vol2:/vol3/sub
+#      --howToRead= on of ...
+#           dd
+#           rsync:/mount/snapshot/at
+#           tar:/mount/snapshot/at
+#      --debug=y (optional)
+# 
+# multiple archsys-* blocks are allowed if different volumes require
+# different handling.
+#
+
+service archsys-TYPE
+{
+  type = UNLISTED
+  protocol = tcp
+  wait = no
+  user = root
+  socket_type = stream
+  server = /usr/local/sbin/archsys.scala
+  server_args = --volumes=/mnt/WORK/main --howToRead=rsync:/mnt/work-snap
+  port = 666
+  nice = 10
+  log_type = SYSLOG daemon
+  only_from = localhost
+  bind = 127.0.0.1
+}

@@ -1,5 +1,5 @@
 #!/bin/bash
-  exec scala -cp "/usr/local/lib/archsys/*:/etc/archsys" "$0" "$@"
+  exec scala -nowarn -cp "/usr/local/lib/archsys/*:/etc/archsys" "$0" "$@"
 !#
 /**
  * Script to facilitate the archival of a complete or 

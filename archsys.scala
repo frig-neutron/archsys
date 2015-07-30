@@ -89,6 +89,9 @@ object Sys {
     isBlockDevice(dev) && 
     ("lvdisplay "+dev ! DevNull) == 0 // don't exception if retcode != 0
 
+  def isBtrfsVolume(dev: String, mountType: String) =
+    isBlockDevice(dev) && (mountType == "btrfs")
+
   def getLvInfo(dev: String) = { 
     val log = new StringProcessLogger
     "lvdisplay -C "+dev ! log // don't exception if retcode != 0
@@ -105,6 +108,13 @@ object Sys {
     Sys.Logger.info("lvcreate "+vg+"/"+dstLv+" success")
   }
 
+  def createBtrfsSnap(path: String, mountAt: String) {
+    val snapCreate = "btrfs subvolume snapshot -r "+path+" "+mountAt
+    val status = execute(List(Process(snapCreate)), DevNull)
+    if (status != 0)
+      throw new NonZeroExitCodeException(snapCreate, status)
+    Sys.Logger.info("btrfs subvolume snapshot -r "+path+" "+mountAt+" success")
+  }
 
   /*
    *  It is dangerous to pipe from one Process to another with scala due to the inability to catch IOException caused by broken pipe.
@@ -156,6 +166,14 @@ object Sys {
     Sys.Logger.info("lvremove "+vg+"/"+lv+" success")
   }
 
+  def destroyBtrfsSnap(mountAt: String) {
+    val snapDelete = "btrfs subvolume delete "+mountAt
+    val status = execute(List(Process(snapDelete)), DevNull)
+    if (status != 0)
+      throw new NonZeroExitCodeException(snapDelete, status)
+    Sys.Logger.info("btrfs subvolume delete "+mountAt+" success")
+  }
+
   // _DO_ exception if retcode != 0
   def tar(path: String) {
     //excludes file can contain exclude patterns that do not match on the system
@@ -198,22 +216,22 @@ object Volume {
     val mounts : Array[String] = Sys.mounts split "\n"
 
     val filtered = mounts filter (
-      line => { 
+      line => {
         val fields = line split " +" map (_.trim)
         fields(2) == mountPath
       }) 
 
-    val mountInfo : Array[Tuple2[String,String]] = filtered map (
+    val mountInfo : Array[Tuple3[String,String,String]] = filtered map (
       line => {
         val fields = line split " +" map (_.trim)
-        (fields(0), fields(2))
+        (fields(0), fields(2), fields(4))
       })
 
     if (mountInfo.isEmpty) 
       throw new IllegalArgumentException("nothing mounted at "+mountPath)
 
-    def stringify(mounts: Array[Tuple2[String,String]]) = 
-      mounts map (m => m._1+"@"+m._2) reduce (_+"\n"+_)
+    def stringify(mounts: Array[Tuple3[String,String,String]]) =
+      mounts map (m => m._1+"@"+m._2+"@"+m._3) reduce (_+"\n"+_)
 
     if (mountInfo.size > 1)
       throw new IllegalStateException(
@@ -221,9 +239,12 @@ object Volume {
         "ambiguous host configuration.\n"+
         stringify(mountInfo))
 
-    val (dev, path) = mountInfo(0)
+    val (dev, path, mountType) = mountInfo(0)
+
     if (Sys.isLvmManaged(dev))
       new LvmVolume(dev, path, mountAt)
+    else if (Sys.isBtrfsVolume(dev, mountType))
+      new BtrfsVolume(dev, path, mountAt)
     else if (Sys.isBlockDevice(dev))
       new RawVolume(dev, path, mountAt)
     else 
@@ -249,6 +270,13 @@ object Volume {
     override def getDevForReading = if (Sys.isLvmManaged(snapDev)) snapDev else super.getDevForReading
 
     override def toString = super.toString+":vg="+vg+":lv="+liveLv
+  }
+
+  private class BtrfsVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
+    protected def doAcquire() = Sys.createBtrfsSnap(path, mountAt)
+    protected def doRelease() = Sys.destroyBtrfsSnap(mountAt)
+    protected def doMount() = {}
+    protected def doUnmount() = {}
   }
 
   private class RawVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {

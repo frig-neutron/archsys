@@ -1,5 +1,5 @@
 #!/bin/bash
-  exec scala -cp "/usr/local/lib/archsys/*:/etc/archsys" "$0" "$@"
+  exec scala -nowarn -cp "/usr/local/lib/archsys/*:/etc/archsys" "$0" "$@"
 !#
 /**
  * Script to facilitate the archival of a complete or 
@@ -82,7 +82,7 @@ object Sys {
   def isBlockDevice(dev: String) = {
     val log = new StringProcessLogger
     "file -bL "+dev ! log // don't exception if retcode != 0
-    log.getOutLines(0) == "block special"
+    log.getOutLines(0) startsWith "block special"
   }
 
   def isLvmManaged(dev: String) = 
@@ -231,7 +231,7 @@ object Volume {
       throw new IllegalArgumentException("nothing mounted at "+mountPath)
 
     def stringify(mounts: Array[Tuple3[String,String,String]]) =
-      mounts map (m => m._1+"@"+m._2+"@"+m._3) reduce (_+"\n"+_)
+      mounts map (m => m._1+"@"+m._2+" ("+m._3+")") reduce (_+"\n"+_)
 
     if (mountInfo.size > 1)
       throw new IllegalStateException(

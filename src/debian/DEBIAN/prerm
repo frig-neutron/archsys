@@ -1,0 +1,1 @@
+#Do not remove or else sbt native-packager will generate unwanted script for you.

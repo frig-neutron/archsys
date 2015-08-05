@@ -60,6 +60,7 @@ object Sys {
   class NonZeroExitCodeException(cmd: String, exitCode: Int) extends Exception(cmd+" failed with exit code "+exitCode)
 
   def mounts = "mount".!!
+  def btrfsMounts = "mount -t btrfs".!!
 
   def isBlockDevice(dev: String) = {
     val log = new StringProcessLogger
@@ -70,7 +71,8 @@ object Sys {
   def isLvmManaged(dev: String) =
     isBlockDevice(dev) && ("lvdisplay "+dev ! DevNull) == 0 // don't exception if retcode != 0
 
-  def isBtrfsVolume(dev: String, mountType: String) = isBlockDevice(dev) && (mountType == "btrfs")
+  def isBtrfsVolume(dev: String) =
+      isBlockDevice(dev) && (btrfsMounts contains dev)
 
   def getLvInfo(dev: String) = {
     val log = new StringProcessLogger

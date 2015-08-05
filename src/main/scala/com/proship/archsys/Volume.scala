@@ -32,7 +32,7 @@ object Volume {
 
     if (Sys.isLvmManaged(dev))
       new LvmVolume(dev, path, mountAt)
-    else if (Sys.isBtrfsVolume(dev, mountType))
+    else if (Sys.isBtrfsVolume(dev))
       new BtrfsVolume(dev, path, mountAt)
     else if (Sys.isBlockDevice(dev))
       new RawVolume(dev, path, mountAt)

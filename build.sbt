@@ -40,22 +40,31 @@ mappings in Universal <<= (mappings in Universal, assembly in Compile) map { (ma
 // the bash scripts classpath only needs the fat jar
 scriptClasspath := Seq( (assemblyJarName in assembly).value )
 
+bashScriptExtraDefines += "export PATH=$PATH:/sbin"
+
+// put in /etc/archsys
+// this will mark the files as configuration files in the debian package
 linuxPackageMappings ++=
   Seq(
     {
       val src = baseDirectory.value / "src" / "main" / "resources" / "tarExcludes"
-      val pkgDst = "etc/archsys/tarExcludes"
-      (src, pkgDst)
+      val pkgDst = "/etc/archsys/tarExcludes"
+      src -> pkgDst
+    },
+    {
+      val src = baseDirectory.value / "src" / "main" / "resources" / "logback.xml"
+      val pkgDst = "/etc/archsys/logback.xml"
+      src -> pkgDst
     }
-  ) map (packageMapping(_))
+  ) map ( packageMapping(_) withConfig() withPerms("0644"))
 
 linuxPackageMappings ++=
   Seq(
-  {
-    val src = baseDirectory.value / "src" / "main" / "resources" / "doc"
-    val pkgDst = "usr/share/doc/archsys"
-    (src, pkgDst)
-  }
+    {
+      val src = baseDirectory.value / "src" / "main" / "resources" / "doc"
+      val pkgDst = "usr/share/doc/archsys"
+      (src, pkgDst)
+    }
   ) map (packageDirectoryAndContentsMapping(_))
 
 linuxPackageMappings in Debian := linuxPackageMappings.value

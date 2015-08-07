@@ -47,6 +47,16 @@ scriptClasspath := Seq( (assemblyJarName in assembly).value )
 scriptClasspath += "conf/logback.xml"
 linuxPackageSymlinks += LinuxSymlink("/usr/share/archsys/conf/logback.xml", "/etc/archsys/logback.xml")
 
+//since we provide our own logback.xml to the classpath, we remove it from the archsys.jar
+assemblyMergeStrategy in assembly := {
+  case PathList("tarExcludes") => MergeStrategy.discard
+  case PathList("logback.xml") => MergeStrategy.discard
+  case x =>
+    val oldStrategy = (assemblyMergeStrategy in assembly).value
+    oldStrategy(x)
+}
+
+//lv* scripts are in /sbin, which is not included by default in the path
 bashScriptExtraDefines += "export PATH=$PATH:/sbin"
 
 // put in /etc/archsys

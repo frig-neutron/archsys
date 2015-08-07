@@ -1,8 +1,10 @@
+import com.typesafe.sbt.packager.linux.LinuxSymlink
+
 name := "archsys"
 
 organization := "com.proship"
 
-version := "0.3.0"
+version := "0.3.1"
 
 scalaVersion := "2.11.4"
 
@@ -40,6 +42,11 @@ mappings in Universal <<= (mappings in Universal, assembly in Compile) map { (ma
 // the bash scripts classpath only needs the fat jar
 scriptClasspath := Seq( (assemblyJarName in assembly).value )
 
+// We add "$lib_dir/conf/logback.xml" to the classpath and symlink it to /etc/archsys/logback.xml,
+// since there is no way to add files outside of $lib_dir to the classpath
+scriptClasspath += "conf/logback.xml"
+linuxPackageSymlinks += LinuxSymlink("/usr/share/archsys/conf/logback.xml", "/etc/archsys/logback.xml")
+
 bashScriptExtraDefines += "export PATH=$PATH:/sbin"
 
 // put in /etc/archsys
@@ -56,7 +63,7 @@ linuxPackageMappings ++=
       val pkgDst = "/etc/archsys/logback.xml"
       src -> pkgDst
     }
-  ) map ( packageMapping(_) withConfig() withPerms("0644"))
+  ) map ( packageMapping(_) withConfig() withPerms("0644") )
 
 linuxPackageMappings ++=
   Seq(

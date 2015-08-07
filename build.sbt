@@ -44,8 +44,8 @@ scriptClasspath := Seq( (assemblyJarName in assembly).value )
 
 // We add "$lib_dir/conf/logback.xml" to the classpath and symlink it to /etc/archsys/logback.xml,
 // since there is no way to add files outside of $lib_dir to the classpath
-scriptClasspath += "conf/logback.xml"
-linuxPackageSymlinks += LinuxSymlink("/usr/share/archsys/conf/logback.xml", "/etc/archsys/logback.xml")
+scriptClasspath += "conf"
+linuxPackageSymlinks += LinuxSymlink("/usr/share/archsys/lib/conf/logback.xml", "/etc/archsys/logback.xml")
 
 //since we provide our own logback.xml to the classpath, we remove it from the archsys.jar
 assemblyMergeStrategy in assembly := {

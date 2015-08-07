@@ -1,5 +1,5 @@
 Package: archsys
-Version: 0.2.2
+Version: 0.3.0
 Section: admin
 Priority: optional
 Depends: scala (>= 2.9.0), xz-utils, tar, xinetd, rsync, mount, file, coreutils

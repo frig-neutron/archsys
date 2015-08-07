@@ -1,5 +1,5 @@
 #!/bin/bash
-  exec scala -cp "/usr/local/lib/archsys/*:/etc/archsys" "$0" "$@"
+  exec scala -nowarn -cp "/usr/local/lib/archsys/*:/etc/archsys" "$0" "$@"
 !#
 /**
  * Script to facilitate the archival of a complete or 
@@ -82,12 +82,15 @@ object Sys {
   def isBlockDevice(dev: String) = {
     val log = new StringProcessLogger
     "file -bL "+dev ! log // don't exception if retcode != 0
-    log.getOutLines(0) == "block special"
+    log.getOutLines(0) startsWith "block special"
   }
 
   def isLvmManaged(dev: String) = 
     isBlockDevice(dev) && 
     ("lvdisplay "+dev ! DevNull) == 0 // don't exception if retcode != 0
+
+  def isBtrfsVolume(dev: String, mountType: String) =
+    isBlockDevice(dev) && (mountType == "btrfs")
 
   def getLvInfo(dev: String) = { 
     val log = new StringProcessLogger
@@ -105,6 +108,13 @@ object Sys {
     Sys.Logger.info("lvcreate "+vg+"/"+dstLv+" success")
   }
 
+  def createBtrfsSnap(path: String, mountAt: String) {
+    val snapCreate = "btrfs subvolume snapshot -r "+path+" "+mountAt
+    val status = execute(List(Process(snapCreate)), DevNull)
+    if (status != 0)
+      throw new NonZeroExitCodeException(snapCreate, status)
+    Sys.Logger.info("btrfs subvolume snapshot -r "+path+" "+mountAt+" success")
+  }
 
   /*
    *  It is dangerous to pipe from one Process to another with scala due to the inability to catch IOException caused by broken pipe.
@@ -156,6 +166,14 @@ object Sys {
     Sys.Logger.info("lvremove "+vg+"/"+lv+" success")
   }
 
+  def destroyBtrfsSnap(mountAt: String) {
+    val snapDelete = "btrfs subvolume delete "+mountAt
+    val status = execute(List(Process(snapDelete)), DevNull)
+    if (status != 0)
+      throw new NonZeroExitCodeException(snapDelete, status)
+    Sys.Logger.info("btrfs subvolume delete "+mountAt+" success")
+  }
+
   // _DO_ exception if retcode != 0
   def tar(path: String) {
     //excludes file can contain exclude patterns that do not match on the system
@@ -198,22 +216,22 @@ object Volume {
     val mounts : Array[String] = Sys.mounts split "\n"
 
     val filtered = mounts filter (
-      line => { 
+      line => {
         val fields = line split " +" map (_.trim)
         fields(2) == mountPath
       }) 
 
-    val mountInfo : Array[Tuple2[String,String]] = filtered map (
+    val mountInfo : Array[Tuple3[String,String,String]] = filtered map (
       line => {
         val fields = line split " +" map (_.trim)
-        (fields(0), fields(2))
+        (fields(0), fields(2), fields(4))
       })
 
     if (mountInfo.isEmpty) 
       throw new IllegalArgumentException("nothing mounted at "+mountPath)
 
-    def stringify(mounts: Array[Tuple2[String,String]]) = 
-      mounts map (m => m._1+"@"+m._2) reduce (_+"\n"+_)
+    def stringify(mounts: Array[Tuple3[String,String,String]]) =
+      mounts map (m => m._1+"@"+m._2+" ("+m._3+")") reduce (_+"\n"+_)
 
     if (mountInfo.size > 1)
       throw new IllegalStateException(
@@ -221,9 +239,12 @@ object Volume {
         "ambiguous host configuration.\n"+
         stringify(mountInfo))
 
-    val (dev, path) = mountInfo(0)
+    val (dev, path, mountType) = mountInfo(0)
+
     if (Sys.isLvmManaged(dev))
       new LvmVolume(dev, path, mountAt)
+    else if (Sys.isBtrfsVolume(dev, mountType))
+      new BtrfsVolume(dev, path, mountAt)
     else if (Sys.isBlockDevice(dev))
       new RawVolume(dev, path, mountAt)
     else 
@@ -249,6 +270,13 @@ object Volume {
     override def getDevForReading = if (Sys.isLvmManaged(snapDev)) snapDev else super.getDevForReading
 
     override def toString = super.toString+":vg="+vg+":lv="+liveLv
+  }
+
+  private class BtrfsVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
+    protected def doAcquire() = Sys.createBtrfsSnap(path, mountAt)
+    protected def doRelease() = Sys.destroyBtrfsSnap(mountAt)
+    protected def doMount() = {}
+    protected def doUnmount() = {}
   }
 
   private class RawVolume(dev: String, path: String, mountAt: String) extends Volume(dev, path, mountAt) {
@@ -295,111 +323,108 @@ abstract class Volume(dev: String, path: String, mountAt: String) {
 }
 
 object VolumeReader {
-    def apply(howToRead: String, volumes: List[Volume]): VolumeReader = { 
-      howToRead match {
-        case "rsync" => new RsyncReader(volumes)
-        case "dd" => new BinaryReader(List(volumes.head))
-        case "tar" => new TarballReader(volumes)
-        case _ => throw new IllegalArgumentException(howToRead+" is not a supported reader type.")
+  def apply(howToRead: String, volumes: List[Volume]): VolumeReader = {
+    howToRead match {
+      case "rsync" => new RsyncReader(volumes)
+      case "dd" => new BinaryReader(List(volumes.head))
+      case "tar" => new TarballReader(volumes)
+      case _ => throw new IllegalArgumentException(howToRead+" is not a supported reader type.")
+    }
+  }
+
+  /**
+   * RsyncReader requires an xinetd configuration to function.
+   * The configuration should be the same as regular rsync, but with
+   */
+  private class RsyncReader(volumes: List[Volume]) extends VolumeReader(volumes) {
+    import java.nio.channels._
+    import java.nio._
+    import java.net._
+    import java.io._
+
+    class SocketJoin(src: ReadableByteChannel, dst: WritableByteChannel) extends Thread {
+      val pollDelay = 10
+      val buf = ByteBuffer.allocateDirect(16 * 4 * 1024) // 64 KB buffer
+      override def run = {
+        @tailrec def loop {
+          buf.clear
+          val bytesRead = src read buf
+          buf.flip
+
+          while(buf.hasRemaining)
+            if ((dst write buf) == 0)
+              Thread sleep pollDelay
+
+            Sys.Logger.debug("transferring "+bytesRead+ " bytes")
+
+            if (bytesRead == 0)
+              Thread sleep pollDelay
+
+            if (bytesRead > -1)
+              loop
+        }
+        loop
       }
     }
 
-    /**
-     * RsyncReader requires an xinetd configuration to function.
-     * The configuration should be the same as regular rsync, but with
-     */
-    private class RsyncReader(volumes: List[Volume]) extends VolumeReader(volumes) {
-      import java.nio.channels._
-      import java.nio._
-      import java.net._
-      import java.io._
-
-      class SocketJoin(src: ReadableByteChannel, dst: WritableByteChannel) extends Thread {
-
-	val pollDelay = 10
-        val buf = ByteBuffer.allocateDirect(16 * 4 * 1024) // 64 KB buffer 
-        override def run = {
-	  @tailrec def loop {
-	    buf.clear
-	    val bytesRead = src read buf
-	    buf.flip
-
-	    while (buf.hasRemaining)
-	      if ((dst write buf) == 0)
-		Thread sleep pollDelay
-
-	    Sys.Logger.debug("transferring "+bytesRead+ " bytes")
-
-	    if (bytesRead == 0) 
-	      Thread sleep pollDelay 
-
-	    if (bytesRead > -1) 
-	      loop
-	  }
-
-	  loop
-        }
-
-      }
-
-      protected def doRead() =
-        using(System.inheritedChannel.asInstanceOf[SocketChannel]) {
-          clientToLocal => 
-            using(Sys.ServerProcess) {
-              server =>
-                using(SocketChannel.open) {
-                  localToServer => {
-                    server.run
-                    /*
-                    * attempt to connect until succeeds in 0.5 seconds interval 
-                    * just in case the server port is not up when we invoke SocketChannel.connect().
-                    * according to documentation on SocketChannel, the socket channel is by default in
-                    * blocking mode and therefore will block until it is connected. IOException is thrown
-                    * if there are any I/O errors (like the specified socket address does not exist (yet)).
-                    * this is our cue to try again. 
-                    */
-                    lazy val connected = {
-                      def connect(socketAddress: InetSocketAddress, retry: Int): Boolean = {
-                        try {
-                          Thread.sleep(500) // TODO: investigate removal of sleep
-                          localToServer.connect(socketAddress)
-                        } catch {
-                          case e: IOException => if (retry <= 0) false else connect(socketAddress, retry-1)
-                        }
+    protected def doRead() =
+      using(System.inheritedChannel.asInstanceOf[SocketChannel]) {
+        clientToLocal =>
+          using(Sys.ServerProcess) {
+            server =>
+              using(SocketChannel.open) {
+                localToServer => {
+                  server.run
+                  /*
+                  * attempt to connect until succeeds in 0.5 seconds interval
+                  * just in case the server port is not up when we invoke SocketChannel.connect().
+                  * according to documentation on SocketChannel, the socket channel is by default in
+                  * blocking mode and therefore will block until it is connected. IOException is thrown
+                  * if there are any I/O errors (like the specified socket address does not exist (yet)).
+                  * this is our cue to try again.
+                  */
+                  lazy val connected = {
+                    def connect(socketAddress: InetSocketAddress, retry: Int): Boolean = {
+                      try {
+                        Thread.sleep(500) // TODO: investigate removal of sleep
+                        localToServer.connect(socketAddress)
+                      } catch {
+                        case e: IOException => if (retry <= 0) false else connect(socketAddress, retry-1)
                       }
-                      connect(new InetSocketAddress("localhost", Sys.ServerProcess.commPort), 5)
                     }
+                    connect(new InetSocketAddress("localhost", Sys.ServerProcess.commPort), 5)
+                  }
 
-                    if (connected) {
-		      localToServer.configureBlocking(false)
-		      clientToLocal.configureBlocking(false)
-		      val loc2server = new SocketJoin(localToServer, clientToLocal)
-		      val loc2client = new SocketJoin(clientToLocal, localToServer)
-		      loc2server.start
-		      loc2client.start
+                  if (connected) {
+                    localToServer.configureBlocking(false)
+                    clientToLocal.configureBlocking(false)
+                    val loc2server = new SocketJoin(localToServer, clientToLocal)
+                    val loc2client = new SocketJoin(clientToLocal, localToServer)
+                    loc2server.start
+                    loc2client.start
 
-		      while (loc2server.isAlive || loc2client.isAlive) {
-			loc2server.join(1000)
-			loc2client.join(1000)
-		      }
-		    }
+                    while (loc2server.isAlive || loc2client.isAlive) {
+                      loc2server.join(1000)
+                      loc2client.join(1000)
+                    }
                   }
                 }
-            }
-        }
-    }
-    /**
-     * since BinaryReader does not require (and in fact abhors filesystem
-     * -level access, it only makes sense to use it if
-     * 1. only one volume is selected for backup
-     * 2. volume not mounted (or mounted r/o)
-     */
-    private class BinaryReader(volumes: List[Volume]) extends VolumeReader(volumes) {
-      protected def doRead() = Sys.dd(volumes.head.getDevForReading)
-    }
-    private class TarballReader(volumes: List[Volume]) extends VolumeReader(volumes) {
-      protected def doRead() = Sys.tar(volumes.head.getMountLocation)
-    }
+              }
+          }
+      }
+  }
+  /**
+   * since BinaryReader does not require (and in fact abhors filesystem
+   * -level access, it only makes sense to use it if
+   * 1. only one volume is selected for backup
+   * 2. volume not mounted (or mounted r/o)
+   */
+  private class BinaryReader(volumes: List[Volume]) extends VolumeReader(volumes) {
+    protected def doRead() = Sys.dd(volumes.head.getDevForReading)
+  }
+  private class TarballReader(volumes: List[Volume]) extends VolumeReader(volumes) {
+    protected def doRead() = Sys.tar(volumes.head.getMountLocation)
+  }
 }
 /**
  * if reader reads FSH, only root specified
@@ -459,7 +484,7 @@ case class Invocation(args: Array[String]) {
 
 object Invocation extends Invocation(args)
 
-val volumes : List[Volume] = Invocation.volumes map (Volume(_, Invocation.mountAt)) 
+val volumes : List[Volume] = Invocation.volumes map (Volume(_, Invocation.mountAt))
 val reader = VolumeReader(Invocation.readerType, volumes)
 reader.read
 

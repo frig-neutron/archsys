@@ -5,3 +5,4 @@
 /proc/*
 /sys/*
 /var/spool/squid/*
+/var/spool/squid3/*

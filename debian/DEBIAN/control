@@ -1,8 +1,0 @@
-Package: archsys
-Version: 0.3.0
-Section: admin
-Priority: optional
-Depends: scala (>= 2.9.0), xz-utils, tar, xinetd, rsync, mount, file, coreutils
-Architecture: all
-Maintainer: Proship IT Team <it@proship.com>
-Description: Server backup script

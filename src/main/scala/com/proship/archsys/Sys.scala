@@ -54,10 +54,17 @@ object Sys {
 
     def info(s: String) = log.info(s)
     def err(s: String) = log.error(s)
+    def err(s: String, e: Throwable) = log.error(s, e)
     def debug(s: String) = if (Runner.Invocation.debug) log.debug(s) else (s: String) => ()
   }
 
-  class NonZeroExitCodeException(cmd: String, exitCode: Int) extends Exception(cmd+" failed with exit code "+exitCode)
+  class NonZeroExitCodeException(
+    cmd: String,
+    exitCode: Int,
+    processLogger: StringProcessLogger) extends Exception(
+      cmd+" failed with exit code "+exitCode+
+      "\nSTDERR:\n"+processLogger.getErrLines.mkString("\n")+
+      "\nSTDOUT:\n"+processLogger.getOutLines.mkString("\n"))
 
   def mounts = "mount".!!
   def btrfsMounts = "mount -t btrfs".!!
@@ -84,17 +91,19 @@ object Sys {
   // _DO_ exception if retcode != 0
   def createLvSnap(vg: String, srcLv: String, dstLv: String, dstLvSize: String) {
     val lvcreate = "lvcreate -L " + dstLvSize + " --snapshot --name "+dstLv+" /dev/"+vg+"/"+srcLv
-    val status = execute(List(Process(lvcreate)), DevNull)
+    val processLogger = new StringProcessLogger
+    val status = execute(List(Process(lvcreate)), processLogger)
     if (status != 0)
-      throw new NonZeroExitCodeException(lvcreate, status)
+      throw new NonZeroExitCodeException(lvcreate, status, processLogger)
     Sys.Logger.info("lvcreate "+vg+"/"+dstLv+" success")
   }
 
   def createBtrfsSnap(path: String, mountAt: String) {
     val snapCreate = "btrfs subvolume snapshot -r "+path+" "+mountAt
-    val status = execute(List(Process(snapCreate)), DevNull)
+    val processLogger = new StringProcessLogger
+    val status = execute(List(Process(snapCreate)), processLogger)
     if (status != 0)
-      throw new NonZeroExitCodeException(snapCreate, status)
+      throw new NonZeroExitCodeException(snapCreate, status, processLogger)
     Sys.Logger.info("btrfs subvolume snapshot -r "+path+" "+mountAt+" success")
   }
 
@@ -124,35 +133,39 @@ object Sys {
       List(mountBind, remount)
     }
     val pbs = cmds map (Process(_))
-    val status = execute(pbs, DevNull, _ #&& _)
+    val processLogger = new StringProcessLogger
+    val status = execute(pbs, processLogger, _ #&& _)
     if (status != 0)
-      throw new NonZeroExitCodeException(cmds.mkString(" && "), status)
+      throw new NonZeroExitCodeException(cmds.mkString(" && "), status, processLogger)
     Sys.Logger.info("mounting "+src+" to "+path+" success")
   }
 
   // _DO_ exception if retcode != 0
   def unmount(path: String) {
     val umount = "umount "+path
-    val status = execute(List(Process(umount)), DevNull)
+    val processLogger = new StringProcessLogger
+    val status = execute(List(Process(umount)), processLogger)
     if (status != 0)
-      throw new NonZeroExitCodeException(umount, status)
+      throw new NonZeroExitCodeException(umount, status, processLogger)
     Sys.Logger.info("unmounting "+path+" success")
   }
 
   // _DO_ exception if retcode != 0
   def destroyLv(vg: String, lv: String) {
     val lvremove = "lvremove -f "+vg+"/"+lv
-    val status = execute(List(Process(lvremove)), DevNull)
+    val processLogger = new StringProcessLogger
+    val status = execute(List(Process(lvremove)), processLogger)
     if (status != 0)
-      throw new NonZeroExitCodeException(lvremove, status)
+      throw new NonZeroExitCodeException(lvremove, status, processLogger)
     Sys.Logger.info("lvremove "+vg+"/"+lv+" success")
   }
 
   def destroyBtrfsSnap(mountAt: String) {
     val snapDelete = "btrfs subvolume delete "+mountAt
-    val status = execute(List(Process(snapDelete)), DevNull)
+    val processLogger = new StringProcessLogger
+    val status = execute(List(Process(snapDelete)), processLogger)
     if (status != 0)
-      throw new NonZeroExitCodeException(snapDelete, status)
+      throw new NonZeroExitCodeException(snapDelete, status, processLogger)
     Sys.Logger.info("btrfs subvolume delete "+mountAt+" success")
   }
 
@@ -169,9 +182,10 @@ object Sys {
   private def compress(cmd: String) {
     val xz = "xz"
     val cmds = List(cmd, xz)
+    val processLogger = new StringProcessLogger
     val status = execute(cmds map (Process(_)), null, _ #| _)
     if (status != 0)
-      throw new NonZeroExitCodeException(cmds.mkString(" | "), status)
+      throw new NonZeroExitCodeException(cmds.mkString(" | "), status, new StringProcessLogger)
   }
 
   // _DO_ exception if retcode != 0

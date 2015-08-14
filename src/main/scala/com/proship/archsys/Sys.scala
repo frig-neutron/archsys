@@ -63,8 +63,8 @@ object Sys {
     exitCode: Int,
     processLogger: StringProcessLogger) extends Exception(
       cmd+" failed with exit code "+exitCode+
-      "\nSTDERR:\n"+processLogger.getErrLines.mkString("\n")+
-      "\nSTDOUT:\n"+processLogger.getOutLines.mkString("\n"))
+      ". STDERR: "+processLogger.getErrLines.mkString("{", "; ", "}")+
+      ". STDOUT: "+processLogger.getOutLines.mkString("{", "; ", "}"))
 
   def mounts = "mount".!!
   def btrfsMounts = "mount -t btrfs".!!

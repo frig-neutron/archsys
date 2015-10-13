@@ -26,7 +26,7 @@ service archsys-TYPE
   wait = no
   user = root
   socket_type = stream
-  server = /usr/local/sbin/archsys.scala
+  server = archsys
   server_args = --volumes=/mnt/WORK/main --howToRead=rsync:/mnt/work-snap
   port = 666
   nice = 10

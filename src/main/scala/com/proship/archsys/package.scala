@@ -14,6 +14,12 @@ package object archsys {
     } finally {
       Thread.sleep(500) // TODO: wait for something explicit
       Sys.Logger.debug("closing "+closeable)
-      closeable.close()
+
+      try {
+        closeable.close()
+      }
+      catch {
+        case e: Exception => Sys.Logger.err("failed closing "+closeable, e)
+      }
     }
 }

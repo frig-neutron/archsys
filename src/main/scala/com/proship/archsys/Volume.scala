@@ -47,7 +47,7 @@ object Volume {
     val snapLvSize = calculateLvSnapSize(liveLvSize)
 
     private def calculateLvSnapSize(originalLvSize: String) = {
-      val portion = 0.1
+      val portion = 0.25
       val sizeAndUnit = originalLvSize.split("\\.\\d+")
       ((sizeAndUnit(0).toFloat * portion) toString()) + sizeAndUnit(1)
     }
